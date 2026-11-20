@@ -5,7 +5,7 @@ import { useToast } from '../../components/toast';
 import { Button, Card, ErrorState, Field, Input, PageHeader, PageSkeleton, Select, fmtDate } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
 import { useStaffGet, type R } from './common';
-import { StaffImage } from './StaffImage';
+import { EvidenceGallery, EvidencePicker, uploadEvidence, type PendingFile } from './Evidence';
 
 export default function ItemDetail() {
   const { id } = useParams();
@@ -14,6 +14,8 @@ export default function ItemDetail() {
   const [status, setStatus] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [newPhotos, setNewPhotos] = useState<PendingFile[]>([]);
+  const [evKey, setEvKey] = useState(0);
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return <PageSkeleton />;
   const i = data.item;
@@ -21,7 +23,6 @@ export default function ItemDetail() {
     setBusy(key);
     try { await fn(); toast(ok); await reload(); } catch (e) { toast((e as ApiError).message, 'error'); } finally { setBusy(null); }
   };
-  const photos = i.photo_file_ids ? i.photo_file_ids.split(',').filter(Boolean) : [];
   return (
     <>
       <PageHeader eyebrow={<Link to="/staff/inventory" className="hover:underline">← Inventory</Link>} title={i.item_name} lead={<span className="font-mono">{i.item_id}</span>} actions={<StatusBadge status={i.status} />} />
@@ -48,7 +49,11 @@ export default function ItemDetail() {
           </Card>
         </div>
         <div className="space-y-5">
-          {photos.length > 0 && <Card className="grid grid-cols-2 gap-2 p-3">{photos.map((p) => <StaffImage key={p} fileId={p} alt={i.item_name} className="aspect-square w-full rounded-xl" />)}</Card>}
+          <EvidenceGallery type="found_item" id={i.item_id} scope="staff" title="Item photos & evidence" refreshKey={evKey} />
+          <Card className="space-y-3 p-4">
+            <EvidencePicker files={newPhotos} onChange={setNewPhotos} label="Add photos" max={12} />
+            {newPhotos.length > 0 && <Button size="sm" loading={busy === 'photos'} onClick={() => act('photos', async () => { const f = await uploadEvidence(`/api/staff/found-items/${i.item_id}/evidence`, newPhotos, 'item_photo'); if (f) throw new Error(`${f} photo(s) failed to upload`); setNewPhotos([]); setEvKey((k) => k + 1); }, 'Photos added to evidence')}>Upload {newPhotos.length} photo(s)</Button>}
+          </Card>
           <Card className="space-y-4 p-6">
             <h2 className="font-bold">Change status</h2>
             <Field label="New status">{(fid) => <Select id={fid} value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Choose…</option><option>In Storage</option><option>Donated</option><option>Disposed</option></Select>}</Field>

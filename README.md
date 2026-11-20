@@ -5,7 +5,7 @@ Live site: https://dhanush7921.github.io/findback-campus-v2/
 Four portals:
 - **Student**: phone OTP sign-in, checked against the college registry. Students report items, track them, see matches, submit evidence, confirm receipt and get notifications.
 - **Guest**: phone OTP sign-in. Guests report with visit info and track only their own complaints.
-- **Main Admin**: staff Google sign-in. Admins register found items, match, verify claims, run handovers, manage the registry, roles and settings. Every action is audited.
+- **Main Admin**: staff Google sign-in. Admins register found items with multi-photo evidence, match, verify claims, run handovers with Proof of Handover (or optional Home Delivery), and manage the registry, roles and settings. Every action is audited.
 - **Management**: staff Google sign-in, read-only. Analytics, trends, hotspots, redacted records, audit, policies and CSV export.
 
 English and Telugu. Installable PWA plus an Android app (Capacitor). The source is iOS-ready.

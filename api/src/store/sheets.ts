@@ -242,7 +242,7 @@ export class SheetsStore implements Store {
   async uploadFile(name: string, mime: string, dataBase64: string): Promise<string> {
     const id = `photos/${crypto.randomUUID()}`;
     const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0));
-    const res = await this.api(`${GCS}/upload/storage/v1/b/${this.bucket}/o?uploadType=media&name=${encodeURIComponent(id)}`, {
+    const res = await this.api(`${GCS}/upload/storage/v1/b/${this.bucket}/o?uploadType=media&ifGenerationMatch=0&name=${encodeURIComponent(id)}`, {
       method: 'POST',
       headers: { 'content-type': mime, 'x-goog-meta-original-name': encodeURIComponent(name).slice(0, 200) },
       body: bytes,

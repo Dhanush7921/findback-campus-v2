@@ -91,3 +91,145 @@ test('management portal is read-only and loads analytics', async ({ page, reques
   const mg = (await api(request, 'POST', '/api/staff/session', undefined, { idToken: dev({ provider: 'google.com', email: 'dean@college.edu' }) })).json.token;
   expect((await api(request, 'POST', '/api/staff/found-items', mg, {})).status).toBe(403);
 });
+
+// ---------- Proof uploads (found items, handover, management read-only) ----------
+import zlib from 'node:zlib';
+function png(w = 64, h = 48, rgb = [20, 160, 140]) {
+  const crc = (b: Buffer) => { let c = ~0; for (const x of b) { c ^= x; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
+  const chunk = (t: string, d: Buffer) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.concat(Array.from({ length: h }, () => Buffer.from([0, ...Array.from({ length: w }, () => rgb).flat()])));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF');
+
+async function staffLogin(page: Page, email: string, portal = 'staff') {
+  await page.goto(portal);
+  await page.getByLabel('Development email').fill(email);
+  await page.getByRole('button', { name: 'Development sign-in' }).click();
+  await expect(page.getByRole('button', { name: 'Development sign-in' })).toBeHidden({ timeout: 15000 });
+}
+
+test('admin registers a found item with camera + gallery photos, previews, private evidence register @mobile', async ({ page }) => {
+  await staffLogin(page, 'clerk@college.edu');
+  await page.goto('staff/register');
+  await page.getByLabel('Category').selectOption('Bag / Backpack');
+  await page.getByLabel('Item name').fill('Blue umbrella E2E');
+  await page.getByLabel('Public description').fill('Blue folding umbrella found near canteen');
+  await page.getByLabel('Colour & features').fill('Blue');
+  await page.getByLabel('Found location').fill('Canteen');
+  await page.getByLabel('Storage location').fill('Shelf B1');
+  await expect(page.getByTestId('evidence-camera')).toHaveAttribute('capture', 'environment');
+  await page.getByTestId('evidence-camera').setInputFiles({ name: 'camera.png', mimeType: 'image/png', buffer: png() });
+  await page.getByTestId('evidence-gallery').setInputFiles([{ name: 'g1.png', mimeType: 'image/png', buffer: png(80, 60, [200, 40, 40]) }, { name: 'g2.png', mimeType: 'image/png', buffer: png(30, 30, [40, 40, 200]) }]);
+  await expect(page.getByTestId('evidence-previews').locator('img')).toHaveCount(3);
+  await page.getByLabel('Remove file 3').click();
+  await expect(page.getByTestId('evidence-previews').locator('img')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Register item' }).click();
+  await expect(page).toHaveURL(/staff\/inventory\/FI-/, { timeout: 30000 });
+  const gallery = page.getByTestId('evidence-found_item');
+  await expect(gallery.locator('li')).toHaveCount(2);
+  await expect(gallery).toContainText('clerk@college.edu');
+  await expect(gallery.locator('img').first()).toBeVisible();
+});
+
+test('counter handover: proof of handover document + photo, release only after receiver confirmation, management read-only view', async ({ page, request, browser }) => {
+  const admin = (await api(request, 'POST', '/api/staff/session', undefined, { idToken: dev({ provider: 'google.com', email: 'clerk@college.edu' }) })).json.token;
+  const stu = (await api(request, 'POST', '/api/auth/session', undefined, { portal: 'student', idToken: dev({ provider: 'phone', phone: '+919811112222' }) })).json.token;
+  const sub = await api(request, 'POST', '/api/me/complaints', stu, { category: 'Wallet / Purse', itemName: 'Brown wallet', description: 'Brown leather wallet with college ID inside', colorFeatures: 'Brown', lastSeenLocation: 'Library', lostDate: new Date().toISOString().slice(0, 10), lostTime: '', ownershipEvidence: 'Has a metro card and two photos inside', idempotencyKey: crypto.randomUUID(), elapsedMs: 15000, website: '' });
+  expect(sub.status).toBe(201);
+  const cid = sub.json.complaintId;
+  const fi = await api(request, 'POST', '/api/staff/found-items', admin, { category: 'Wallet / Purse', itemName: 'Brown wallet', publicDescription: 'Brown wallet found in library', privateDetails: 'Metro card', colorFeatures: 'Brown', foundLocation: 'Library', foundDate: new Date().toISOString().slice(0, 10), storageLocation: 'Safe' });
+  await api(request, 'POST', `/api/staff/complaints/${cid}/propose-match`, admin, { itemId: fi.json.itemId });
+  const claim = await api(request, 'POST', `/api/me/complaints/${cid}/claim`, stu, { itemId: fi.json.itemId, evidence: 'Metro card and two passport photos inside' });
+  await api(request, 'POST', `/api/staff/claims/${claim.json.claimId}/decision`, admin, { decision: 'approve', notes: 'Matches', checks: { evidenceMatches: true, featuresMatch: true, noConflictingClaims: true } });
+  const start = await api(request, 'POST', '/api/staff/handovers', admin, { claimId: claim.json.claimId, receiverType: 'owner', receiverName: 'Ravi Kumar', receiverIdType: 'College ID card', receiverIdLast4: '0200' });
+  expect(start.status).toBe(201);
+  const ho = start.json.handoverId;
+
+  await staffLogin(page, 'clerk@college.edu');
+  await page.goto('staff/handovers');
+  const row = page.locator('tr', { hasText: ho });
+  await expect(row.getByRole('button', { name: 'Confirm release' })).toHaveCount(0); // not before receiver confirmation
+  await row.getByRole('button', { name: 'Proof of handover' }).click();
+  const panel = page.getByTestId('proof-panel');
+  await expect(panel).toContainText(cid);
+  await panel.getByLabel('Evidence type').selectOption('handover_document');
+  await panel.getByTestId('evidence-gallery').setInputFiles({ name: 'register.pdf', mimeType: 'application/pdf', buffer: PDF });
+  await panel.getByLabel('Caption').fill('Signed register page');
+  await panel.getByRole('button', { name: 'Save evidence' }).click();
+  await expect(panel.getByTestId('evidence-handover').locator('li')).toHaveCount(1);
+  await panel.getByLabel('Evidence type').selectOption('handover_photo');
+  await panel.getByTestId('evidence-camera').setInputFiles({ name: 'counter.png', mimeType: 'image/png', buffer: png() });
+  await panel.getByRole('button', { name: 'Save evidence' }).click();
+  await expect(panel.getByTestId('evidence-handover').locator('li')).toHaveCount(2);
+  await page.keyboard.press('Escape');
+
+  expect((await api(request, 'POST', `/api/me/handovers/${ho}/acknowledge`, stu, { code: start.json.code, signatureName: 'Ravi Kumar', accept: true, signature: { mime: 'image/png', dataBase64: png(40, 20, [0, 0, 0]).toString('base64') } })).status).toBe(200);
+  await page.reload();
+  await page.locator('tr', { hasText: ho }).getByRole('button', { name: 'Confirm release' }).click();
+  await page.getByRole('checkbox').last().check();
+  await page.getByRole('button', { name: 'Confirm release' }).last().click();
+  await expect(page.getByText('Verified').first()).toBeVisible();
+  expect((await api(request, 'GET', `/api/me/complaints/${cid}`, stu)).json.complaint.status).toBe('Returned');
+
+  // management: view-only evidence, no upload controls
+  const ctx = await browser.newContext();
+  const mp = await ctx.newPage();
+  await staffLogin(mp, 'dean@college.edu', 'management');
+  await mp.goto('management/handovers');
+  await mp.locator('tr', { hasText: ho }).getByRole('button', { name: 'Evidence' }).click();
+  const mg = mp.getByTestId('evidence-handover');
+  await expect(mg.locator('li')).toHaveCount(3);
+  await expect(mg).toContainText('Withheld');
+  await expect(mp.getByTestId('evidence-gallery')).toHaveCount(0);
+  await expect(mp.getByRole('button', { name: 'Save evidence' })).toHaveCount(0);
+  await ctx.close();
+});
+
+test('home delivery: courier issues doorstep code, uploads proof, records completion; another admin finalises @mobile', async ({ page, request }) => {
+  const boss = (await api(request, 'POST', '/api/staff/session', undefined, { idToken: dev({ provider: 'google.com', email: 'dev.admin@example.edu' }) })).json.token;
+  await api(request, 'POST', '/api/staff/settings', boss, { settings: { home_delivery_enabled: 'true' } });
+  const phone = `+9199${String(Date.now()).slice(-8)}`;
+  const guest = (await api(request, 'POST', '/api/auth/session', undefined, { portal: 'guest', idToken: dev({ provider: 'phone', phone }) })).json.token;
+  const sub = await api(request, 'POST', '/api/me/complaints', guest, { guestName: 'Visiting Parent', category: 'Electronics', itemName: 'Grey power bank', description: 'Grey 10000 mAh power bank with a cable', colorFeatures: 'Grey', lastSeenLocation: 'Auditorium', lostDate: new Date().toISOString().slice(0, 10), lostTime: '', ownershipEvidence: 'Sticker of a cat on the back side', visitInfo: 'Parents day', idempotencyKey: crypto.randomUUID(), elapsedMs: 15000, website: '' });
+  expect(sub.status).toBe(201);
+  const cid = sub.json.complaintId;
+  const fi = await api(request, 'POST', '/api/staff/found-items', boss, { category: 'Electronics', itemName: 'Power bank', publicDescription: 'Grey power bank found in auditorium', privateDetails: 'Cat sticker', colorFeatures: 'Grey', foundLocation: 'Auditorium', foundDate: new Date().toISOString().slice(0, 10), storageLocation: 'Drawer 3' });
+  await api(request, 'POST', `/api/staff/complaints/${cid}/propose-match`, boss, { itemId: fi.json.itemId });
+  const claim = await api(request, 'POST', `/api/me/complaints/${cid}/claim`, guest, { itemId: fi.json.itemId, evidence: 'There is a cat sticker on the back side' });
+  await api(request, 'POST', `/api/staff/claims/${claim.json.claimId}/decision`, boss, { decision: 'approve', notes: 'Matches', checks: { evidenceMatches: true, featuresMatch: true, noConflictingClaims: true } });
+  const start = await api(request, 'POST', '/api/staff/handovers', boss, { claimId: claim.json.claimId, receiverType: 'owner', receiverName: 'Visiting Parent', receiverIdType: 'Aadhaar', receiverIdLast4: '4321', mode: 'delivery', deliveryStaff: 'clerk@college.edu', deliveryAddress: '12 Lake View Road, Hyderabad 500001' });
+  expect(start.status).toBe(201);
+  const ho = start.json.handoverId;
+
+  // courier on their phone
+  await staffLogin(page, 'clerk@college.edu');
+  await page.goto('staff/handovers');
+  await page.locator('tr', { hasText: ho }).getByRole('button', { name: 'Proof of handover' }).click();
+  const panel = page.getByTestId('proof-panel');
+  await expect(panel).toContainText('12 Lake View Road'); // admin-only address
+  await panel.getByRole('button', { name: 'Issue doorstep code' }).click();
+  const code = (await panel.getByTestId('delivery-code').textContent())!.trim();
+  expect(code).toMatch(/^\d{6}$/);
+  expect((await api(request, 'POST', `/api/me/handovers/${ho}/acknowledge`, guest, { code, signatureName: 'Visiting Parent', accept: true })).status).toBe(200);
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.locator('tr', { hasText: ho }).getByRole('button', { name: 'Proof of handover' }).click();
+  await expect(panel.getByLabel('Evidence type')).toHaveValue('delivery_proof');
+  await panel.getByTestId('evidence-camera').setInputFiles({ name: 'door.png', mimeType: 'image/png', buffer: png() });
+  await panel.getByRole('button', { name: 'Save evidence' }).click();
+  await expect(panel.getByTestId('evidence-handover').locator('li')).toHaveCount(1);
+  await panel.getByRole('button', { name: 'Record delivery completed now' }).click();
+  await expect(page.getByText('Delivery recorded').first()).toBeVisible();
+  expect((await api(request, 'GET', `/api/me/complaints/${cid}`, guest)).json.complaint.status).toBe('Awaiting Receiver Confirmation');
+
+  // address never reaches management or the reporter
+  const dean = (await api(request, 'POST', '/api/staff/session', undefined, { idToken: dev({ provider: 'google.com', email: 'dean@college.edu' }) })).json.token;
+  expect(JSON.stringify((await api(request, 'GET', '/api/mgmt/handovers', dean)).json)).not.toContain('Lake View');
+  expect(JSON.stringify((await api(request, 'GET', `/api/me/complaints/${cid}`, guest)).json)).not.toContain('Lake View');
+
+  // staff finalisation
+  expect((await api(request, 'POST', `/api/staff/handovers/${ho}/release`, boss, { confirmPhysicalRelease: true })).status).toBe(200);
+  expect((await api(request, 'GET', `/api/me/complaints/${cid}`, guest)).json.complaint.status).toBe('Returned');
+});

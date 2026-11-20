@@ -10,6 +10,8 @@ const ADMIN_ROUTES: [string, string][] = [
   ['POST', '/api/staff/found-items/FI-AAAAAAAA/status'], ['GET', '/api/staff/claims'], ['POST', '/api/staff/claims/CL-AAAAAAAA/decision'],
   ['GET', '/api/staff/handovers'], ['POST', '/api/staff/handovers'], ['GET', '/api/staff/handovers/HO-AAAAAAAA'],
   ['POST', '/api/staff/handovers/HO-AAAAAAAA/release'], ['POST', '/api/staff/handovers/HO-AAAAAAAA/cancel'],
+  ['POST', '/api/staff/handovers/HO-AAAAAAAA/evidence'], ['POST', '/api/staff/handovers/HO-AAAAAAAA/delivery-code'], ['POST', '/api/staff/handovers/HO-AAAAAAAA/delivered'],
+  ['POST', '/api/staff/found-items/FI-AAAAAAAA/evidence'], ['GET', '/api/staff/evidence?type=handover&id=HO-AAAAAAAA'], ['GET', '/api/staff/evidence/EV-AAAAAAAA/file'],
   ['GET', '/api/staff/unclaimed'], ['GET', '/api/staff/activity'], ['GET', '/api/staff/settings'], ['POST', '/api/staff/settings'],
   ['POST', '/api/staff/backup'], ['GET', '/api/staff/files/photos~00000000-0000-0000-0000-000000000000'], ['GET', '/api/staff/registry'],
   ['POST', '/api/staff/registry/import'], ['POST', '/api/staff/registry/22CSE104'], ['GET', '/api/staff/guests'],
@@ -26,7 +28,7 @@ describe('Management portal is monitoring-only (Option A)', () => {
       expect([p, r.status]).toEqual([p, 403]);
     }
     // there are no write routes under /api/mgmt at all
-    for (const p of ['/api/mgmt/complaints', '/api/mgmt/analytics', '/api/mgmt/export']) expect((await c.call('POST', p, {}, mgmt)).status).toBe(404);
+    for (const p of ['/api/mgmt/complaints', '/api/mgmt/analytics', '/api/mgmt/export', '/api/mgmt/evidence', '/api/mgmt/evidence/EV-AAAAAAAA/file']) expect((await c.call('POST', p, {}, mgmt)).status).toBe(404);
   });
 
   it('students and guests cannot reach admin or management APIs', async () => {

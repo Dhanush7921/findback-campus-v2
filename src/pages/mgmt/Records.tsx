@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { StatusBadge } from '../../components/status';
-import { Card, ErrorState, Modal, PageHeader, PageSkeleton, Select, fmtDate } from '../../components/ui';
+import { Button, Card, ErrorState, Modal, PageHeader, PageSkeleton, Select, fmtDate } from '../../components/ui';
+import { EvidenceGallery } from '../staff/Evidence';
 import { Pager, Table, useStaffGet, type R } from '../staff/common';
 import { ExportButton } from './shared';
 
@@ -53,7 +54,16 @@ export function MgmtComplaints() {
   );
 }
 
+function EvidenceModal({ ev, onClose }: { ev: { type: 'found_item' | 'handover'; id: string } | null; onClose: () => void }) {
+  return (
+    <Modal open={!!ev} onClose={onClose} title="Evidence (read-only)">
+      {ev && <div className="space-y-3"><p className="text-xs text-ink-500">View only. Management cannot upload, replace, edit or delete evidence. Receiver signatures and addresses are withheld; each view is recorded in the audit log.</p><EvidenceGallery type={ev.type} id={ev.id} scope="mgmt" title={ev.id} /></div>}
+    </Modal>
+  );
+}
+
 export function MgmtFound() {
+  const [ev, setEv] = useState<{ type: 'found_item' | 'handover'; id: string } | null>(null);
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const { data, error, reload } = useStaffGet<{ rows: R[]; total: number; page: number; pageSize: number }>(`/api/mgmt/found-items?page=${page}&status=${encodeURIComponent(status)}`);
@@ -65,7 +75,7 @@ export function MgmtFound() {
       <Card className="overflow-hidden">
         {error ? <ErrorState message={error} onRetry={reload} /> : !data ? <PageSkeleton /> : (
           <>
-            <Table head={['Item', 'Description', 'Found', 'Registered by', 'Status']} empty={!data.rows.length}>
+            <Table head={['Item', 'Description', 'Found', 'Registered by', 'Status', '']} empty={!data.rows.length}>
               {data.rows.map((f) => (
                 <tr key={f.itemId}>
                   <td className="px-4 py-3"><span className="font-mono text-xs">{f.itemId}</span><span className="block font-medium">{f.itemName}</span><span className="text-xs text-ink-500">{f.category}</span></td>
@@ -73,6 +83,7 @@ export function MgmtFound() {
                   <td className="px-4 py-3 text-xs">{f.foundLocation}<br />{fmtDate(f.foundDate, false)}</td>
                   <td className="px-4 py-3 text-xs">{f.registeredBy}</td>
                   <td className="px-4 py-3"><StatusBadge status={f.status} translate={false} /></td>
+                  <td className="px-4 py-3 text-right"><Button size="sm" variant="ghost" onClick={() => setEv({ type: 'found_item', id: f.itemId })}>Evidence</Button></td>
                 </tr>
               ))}
             </Table>
@@ -80,34 +91,38 @@ export function MgmtFound() {
           </>
         )}
       </Card>
+      <EvidenceModal ev={ev} onClose={() => setEv(null)} />
     </>
   );
 }
 
 export function MgmtHandovers() {
+  const [ev, setEv] = useState<{ type: 'found_item' | 'handover'; id: string } | null>(null);
   const [status, setStatus] = useState('');
   const { data, error, reload } = useStaffGet<{ rows: R[] }>(`/api/mgmt/handovers?status=${encodeURIComponent(status)}`);
   return (
     <>
       <PageHeader title="Handovers" lead="Pending and completed receiver-confirmed handovers, with the approving and releasing staff." actions={
-        <div className="flex gap-2"><Select aria-label="Status" className="!w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>{['', 'Pending Acknowledgment', 'Acknowledged', 'Released', 'Cancelled', 'Expired'].map((s) => <option key={s} value={s}>{s || 'All'}</option>)}</Select><ExportButton type="handovers" qs="" label="Export" /></div>
+        <div className="flex gap-2"><Select aria-label="Status" className="!w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>{['', 'Pending Acknowledgment', 'Acknowledged', 'Delivered', 'Released', 'Cancelled', 'Expired'].map((s) => <option key={s} value={s}>{s || 'All'}</option>)}</Select><ExportButton type="handovers" qs="" label="Export" /></div>
       } />
       <Card className="overflow-hidden">
         {error ? <ErrorState message={error} onRetry={reload} /> : !data ? <PageSkeleton /> : (
-          <Table head={['Handover', 'Complaint / item', 'Receiver', 'Approved / released by', 'Confirmed / released', 'Status']} empty={!data.rows.length}>
+          <Table head={['Handover', 'Complaint / item', 'Receiver', 'Approved / released by', 'Confirmed / released', 'Status', '']} empty={!data.rows.length}>
             {data.rows.map((h) => (
               <tr key={h.handoverId}>
                 <td className="px-4 py-3 font-mono text-xs">{h.handoverId}</td>
                 <td className="px-4 py-3 font-mono text-xs">{h.complaintId}<br />{h.itemId}</td>
-                <td className="px-4 py-3">{h.receiverName}<span className="block text-xs text-ink-500">{h.receiverType}</span></td>
+                <td className="px-4 py-3">{h.receiverName}<span className="block text-xs text-ink-500">{h.receiverType}{h.mode === 'delivery' ? ` · home delivery by ${h.deliveredBy || h.deliveryStaff}` : ''}</span></td>
                 <td className="px-4 py-3 text-xs">{h.approvedBy}<br />{h.releasedBy || '—'}</td>
                 <td className="px-4 py-3 text-xs">{fmtDate(h.acknowledgedAt)}<br />{fmtDate(h.releasedAt)}</td>
                 <td className="px-4 py-3"><StatusBadge status={h.status} translate={false} /></td>
+                <td className="px-4 py-3 text-right"><Button size="sm" variant="ghost" onClick={() => setEv({ type: 'handover', id: h.handoverId })}>Evidence</Button></td>
               </tr>
             ))}
           </Table>
         )}
       </Card>
+      <EvidenceModal ev={ev} onClose={() => setEv(null)} />
     </>
   );
 }

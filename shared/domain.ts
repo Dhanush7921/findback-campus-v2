@@ -49,7 +49,8 @@ export const FOUND_ITEM_STATUSES = ['In Storage', 'Matched', 'Claimed', 'Returne
 export type FoundItemStatus = (typeof FOUND_ITEM_STATUSES)[number];
 
 export const CLAIM_STATUSES = ['Pending', 'Disputed', 'Approved', 'Rejected', 'Completed', 'Withdrawn'] as const;
-export const HANDOVER_STATUSES = ['Pending Acknowledgment', 'Acknowledged', 'Released', 'Cancelled', 'Expired'] as const;
+export const HANDOVER_STATUSES = ['Pending Acknowledgment', 'Acknowledged', 'Delivered', 'Released', 'Cancelled', 'Expired'] as const;
+export const HANDOVER_MODES = ['counter', 'delivery'] as const;
 
 export const CATEGORIES = [
   'Electronics',
@@ -112,6 +113,8 @@ export const TABLES = {
     'receiver_id_type', 'receiver_id_last4', 'verification_method', 'challenge_hash', 'challenge_expires_at',
     'challenge_attempts', 'acknowledged_at', 'signature_name', 'acknowledgment_text', 'evidence_file_id',
     'released_at', 'version',
+    // V2.1 proof of handover / home delivery (delivery_address is admin-only, never exposed to management or reporters' public views)
+    'mode', 'delivery_staff', 'delivery_address', 'dispatched_at', 'delivered_at', 'delivered_by',
   ],
   Activity_Log: ['log_id', 'created_at', 'actor', 'action', 'entity', 'entity_id', 'details', 'role', 'ip_hash'],
   Application_Settings: ['key', 'value', 'updated_at', 'updated_by'],
@@ -122,11 +125,16 @@ export const TABLES = {
   ],
   Guest_Identities: ['uid', 'phone', 'name', 'created_at', 'last_login_at', 'status', 'version'],
   Staff_Roles: ['email', 'role', 'name', 'status', 'added_at', 'added_by', 'updated_at', 'version'],
+  // Private evidence register (files live in the private bucket; rows are append-only, so evidence can never be replaced or deleted via the app)
+  Evidence_Files: [
+    'evidence_id', 'created_at', 'entity_type', 'entity_id', 'complaint_id', 'kind', 'file_id', 'mime', 'bytes', 'sha256',
+    'uploaded_by', 'uploaded_role', 'caption',
+  ],
 } as const;
 export type TableName = keyof typeof TABLES;
 export type Row = Record<string, string>;
 /** Tables that the application may only append to. */
-export const APPEND_ONLY: TableName[] = ['Activity_Log', 'Complaint_Updates'];
+export const APPEND_ONLY: TableName[] = ['Activity_Log', 'Complaint_Updates', 'Evidence_Files'];
 
 /** Key column per table (unique, used for get/update). */
 export const TABLE_KEYS: Record<TableName, string> = {
@@ -141,6 +149,7 @@ export const TABLE_KEYS: Record<TableName, string> = {
   Student_Registry: 'student_id',
   Guest_Identities: 'uid',
   Staff_Roles: 'email',
+  Evidence_Files: 'evidence_id',
 };
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
@@ -153,6 +162,8 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   require_two_staff: 'false',
   submissions_open: 'true',
   guest_reports_open: 'true',
+  home_delivery_enabled: 'false',
+  handover_proof_required: 'false', // college policy: require a photo/document of the handover before release
 };
 export const EDITABLE_SETTINGS = Object.keys(DEFAULT_SETTINGS);
 
@@ -217,6 +228,19 @@ export const imageUpload = z.object({
 });
 export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 
+/** Evidence files: images or PDF documents, validated by magic bytes on the server. */
+export const EVIDENCE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
+export const MAX_EVIDENCE_BYTES = 5 * 1024 * 1024;
+export const EVIDENCE_KINDS = ['item_photo', 'handover_photo', 'handover_document', 'delivery_proof', 'signature'] as const;
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+export const MAX_EVIDENCE_PER_ENTITY = 12;
+export const evidenceUpload = z.object({
+  kind: z.enum(['item_photo', 'handover_photo', 'handover_document', 'delivery_proof']),
+  mime: z.enum(EVIDENCE_MIMES),
+  dataBase64: z.string().min(8).max(7_000_000), // ~5 MB decoded
+  caption: optionalClean(200),
+});
+
 export const portalUpdateInput = z.object({
   email: optionalClean(120).refine((v) => v === '' || z.email().safeParse(v).success, 'Enter a valid email'),
   extraInfo: optionalClean(1000),
@@ -269,6 +293,18 @@ export const handoverStartInput = z.object({
   receiverName: clean(80, 2),
   receiverIdType: z.enum(['College ID card', 'Aadhaar', 'Driving licence', 'Passport', 'Voter ID', 'Other government ID']),
   receiverIdLast4: z.string().regex(/^[A-Za-z0-9]{4}$/, 'Last 4 characters only'),
+  notes: optionalClean(500),
+  mode: z.enum(HANDOVER_MODES).default('counter'),
+  deliveryStaff: z.string().trim().toLowerCase().optional().default(''),
+  deliveryAddress: optionalClean(300),
+}).superRefine((v, ctx) => {
+  if (v.mode !== 'delivery') return;
+  if (!z.email().safeParse(v.deliveryStaff).success) ctx.addIssue({ code: 'custom', path: ['deliveryStaff'], message: 'Choose the delivery staff member' });
+  if (v.deliveryAddress.length < 10) ctx.addIssue({ code: 'custom', path: ['deliveryAddress'], message: 'Enter the delivery address' });
+});
+
+export const deliveredInput = z.object({
+  confirmDelivered: z.literal(true),
   notes: optionalClean(500),
 });
 

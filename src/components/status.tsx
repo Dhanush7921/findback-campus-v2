@@ -13,6 +13,7 @@ const tone: Record<string, string> = {
   Unclaimed: 'bg-stone-100 text-stone-700',
   'Pending Acknowledgment': 'bg-cyan-100 text-cyan-900',
   Acknowledged: 'bg-sky-100 text-sky-800',
+  Delivered: 'bg-indigo-100 text-indigo-800',
   Released: 'bg-teal-100 text-teal-800',
   Expired: 'bg-zinc-100 text-zinc-600',
   'Ready for Collection': 'bg-emerald-100 text-emerald-800',

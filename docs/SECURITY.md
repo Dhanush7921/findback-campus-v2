@@ -20,6 +20,15 @@
 - An admin then confirms the physical release (optionally a second staff member).
 - 5 wrong codes cancel the handover. Replay returns `already_used`. A complaint becomes Returned only through this flow.
 
+**Evidence (photos, documents, signatures, delivery proof)**
+- Validated on the server: declared type plus magic bytes (JPEG, PNG, WebP, PDF), 5 MB per file, 12 files per item or handover. Images are downscaled on the device first, which also strips EXIF/GPS.
+- Stored in the private bucket with create-only uploads (`ifGenerationMatch=0`, so an object can never be overwritten).
+- Registered in the append-only `Evidence_Files` tab with the entity, Complaint ID, kind, staff identity, time, size and SHA-256.
+- There is no API to replace or delete evidence. Handover evidence is frozen once the handover is released or cancelled.
+- Every upload is audited (`evidence_uploaded`).
+- Management sees evidence read-only. Receiver signatures and delivery addresses are withheld, and each management view is audited (`evidence_viewed`).
+- Reporters never receive proof images. Evidence files are kept as handover records and are not removed by the retention sweep.
+
 **Data**
 - Sheets are shared only with the service account and owner, never publicly.
 - Activity_Log and Complaint_Updates are append-only.

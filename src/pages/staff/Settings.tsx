@@ -14,6 +14,8 @@ const LABELS: Record<string, [string, string?]> = {
   require_two_staff: ['Require a different staff member for handover', 'bool'],
   submissions_open: ['Accept new complaints', 'bool'],
   guest_reports_open: ['Accept guest reports', 'bool'],
+  home_delivery_enabled: ['Enable home delivery as a handover mode', 'bool'],
+  handover_proof_required: ['Require a handover photo or document before release (college policy)', 'bool'],
 };
 
 export default function Settings() {

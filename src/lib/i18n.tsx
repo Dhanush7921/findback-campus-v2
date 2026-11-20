@@ -257,7 +257,7 @@ const en = {
   'cv.claimSubmit': "This is mine — submit evidence",
   'ack.title': "Confirm you received your item",
   'ack.lead': "Do this only at the counter, when the item is in your hands. The office will then confirm release.",
-  'ack.code': "Code shown at the counter",
+  'ack.code': "Code shown at the counter or by the delivery staff",
   'ack.signName': "Type your full name as signature",
   'ack.draw': "Sign here (optional)",
   'ack.clear': "Clear",

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import {
-  acknowledgeInput, claimDecisionInput, claimInput, complaintInput, DEFAULT_SETTINGS, EDITABLE_SETTINGS,
+  acknowledgeInput, claimDecisionInput, deliveredInput, evidenceUpload, MAX_EVIDENCE_BYTES, MAX_EVIDENCE_PER_ENTITY, claimInput, complaintInput, DEFAULT_SETTINGS, EDITABLE_SETTINGS,
   foundItemInput, FOUND_ITEM_STATUSES, handoverStartInput, imageUpload, MAX_IMAGE_BYTES, maskPhone, maskSensitive,
   normalizeStatus, OPEN_STATUSES, portalUpdateInput, proxyInput, registryRowInput, releaseInput, staffRoleInput,
   statusUpdateInput, STATUS_TRANSITIONS, WORKFLOW_STATUSES, type ComplaintStatus, type Row, type StaffRole,
 } from '../../shared/domain';
-import { keyedHash, newComplaintId, newHandoverCode, newId, safeEqual, sha256Hex, signSession, verifySession, type ReporterSession, type Session, type StaffSession } from './crypto';
+import { keyedHash, newComplaintId, newHandoverCode, newId, safeEqual, sha256Hex, toHex, signSession, verifySession, type ReporterSession, type Session, type StaffSession } from './crypto';
 import type { Env, RateLimit } from './env';
 import { verifyFirebaseIdToken, type FirebaseIdentity } from './firebaseAuth';
 import { corsHeaders, errorResponse, HttpError, json, readJson, withHeaders } from './http';
@@ -142,6 +142,48 @@ export function createApp(deps: AppDeps) {
     checkImage(img);
     return store().uploadFile(`${name}.${img.mime.split('/')[1]}`, img.mime, img.dataBase64);
   }
+  /** Validates an evidence file by declared type AND magic bytes, and enforces the size limit. Returns decoded size + SHA-256. */
+  async function checkEvidence(mime: string, dataBase64: string) {
+    let bin: string;
+    try { bin = atob(dataBase64); } catch { throw new HttpError(415, 'bad_file', 'Invalid file data.'); }
+    if (bin.length === 0 || bin.length > MAX_EVIDENCE_BYTES) throw new HttpError(413, 'file_too_large', 'Each file must be under 5 MB.');
+    const b = (i: number) => bin.charCodeAt(i);
+    const sig =
+      (mime === 'image/jpeg' && b(0) === 0xff && b(1) === 0xd8 && b(2) === 0xff) ||
+      (mime === 'image/png' && b(0) === 0x89 && bin.slice(1, 4) === 'PNG') ||
+      (mime === 'image/webp' && bin.slice(0, 4) === 'RIFF' && bin.slice(8, 12) === 'WEBP') ||
+      (mime === 'application/pdf' && bin.slice(0, 5) === '%PDF-');
+    if (!sig) throw new HttpError(415, 'bad_file', 'Only JPEG, PNG, WebP images or PDF documents are accepted, and the content must match the file type.');
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return { bytes: bin.length, sha256: toHex(await crypto.subtle.digest('SHA-256', bytes)) };
+  }
+  interface EvidenceArgs { entityType: 'found_item' | 'handover'; entityId: string; complaintId: string; kind: string; mime: string; dataBase64: string; caption: string }
+  /** Uploads to the private bucket (create-only, never overwrites) and returns the append-only register row + audit entry. */
+  async function storeEvidence(ctx: Ctx, actor: Actor, a: EvidenceArgs): Promise<{ evidenceId: string; fileId: string; ops: Op[] }> {
+    const meta = await checkEvidence(a.mime, a.dataBase64);
+    const evidenceId = newId('EV');
+    const ext = a.mime === 'application/pdf' ? 'pdf' : a.mime.split('/')[1];
+    const fileId = await store().uploadFile(`${a.entityId}-${evidenceId}.${ext}`, a.mime, a.dataBase64);
+    return {
+      evidenceId, fileId,
+      ops: [
+        { op: 'append', table: 'Evidence_Files', row: { evidence_id: evidenceId, created_at: iso(), entity_type: a.entityType, entity_id: a.entityId, complaint_id: a.complaintId, kind: a.kind, file_id: fileId, mime: a.mime, bytes: String(meta.bytes), sha256: meta.sha256, uploaded_by: actor.id, uploaded_role: actor.role, caption: a.caption } },
+        log(ctx, actor, 'evidence_uploaded', a.entityType === 'found_item' ? 'FoundItem' : 'Handover', a.entityId, `${evidenceId} ${a.kind} ${a.mime} ${meta.bytes}B sha256:${meta.sha256.slice(0, 16)}`),
+      ],
+    };
+  }
+  async function evidenceFor(entityType: string, entityId: string) {
+    return rowsOf((await exec([{ op: 'query', table: 'Evidence_Files', where: { entity_type: entityType, entity_id: entityId }, limit: 200, order: 'asc' }]))[0]);
+  }
+  function evidenceView(e: Row, redact: boolean) {
+    const withheld = redact && e.kind === 'signature';
+    return {
+      evidenceId: e.evidence_id, createdAt: e.created_at, entityType: e.entity_type, entityId: e.entity_id, complaintId: e.complaint_id, kind: e.kind,
+      mime: e.mime, bytes: Number(e.bytes) || 0, sha256: e.sha256, uploadedBy: redact && e.uploaded_role !== 'admin' ? 'Receiver (verified phone)' : e.uploaded_by,
+      uploadedRole: e.uploaded_role, caption: redact ? maskSensitive(e.caption) : e.caption, withheld,
+    };
+  }
+
   function transition(from: string, to: ComplaintStatus) {
     const allowed = STATUS_TRANSITIONS[normalizeStatus(from) as ComplaintStatus] ?? [];
     if (!allowed.includes(to)) throw new HttpError(409, 'invalid_transition', `Cannot move a complaint from "${normalizeStatus(from)}" to "${to}".`);
@@ -281,6 +323,7 @@ export function createApp(deps: AppDeps) {
       handoverId: h.handover_id, status: h.status || 'Released', complaintId: h.complaint_id, itemId: h.item_id, claimId: h.claim_id,
       receiverName: h.receiver_name, receiverType: h.receiver_type || 'owner', verificationMethod: h.verification_method || 'V1 staff ID check',
       startedAt: h.created_at, acknowledgedAt: h.acknowledged_at, releasedAt: h.released_at || (h.status ? '' : h.created_at),
+      mode: h.mode || 'counter', deliveredAt: h.delivered_at,
     };
     if (forReporter) return base;
     return {
@@ -288,6 +331,7 @@ export function createApp(deps: AppDeps) {
       receiverIdLast4: h.receiver_id_last4, receiverPhone: maskPhone(h.receiver_phone), receiverUid: h.receiver_uid, reporterUid: h.reporter_uid,
       ownerAuthorization: safeJson(h.owner_authorization), signatureName: h.signature_name, acknowledgmentText: h.acknowledgment_text,
       hasSignature: Boolean(h.evidence_file_id), evidenceFileId: h.evidence_file_id, notes: h.notes, challengeExpiresAt: h.challenge_expires_at,
+      deliveryStaff: h.delivery_staff, deliveryAddress: h.delivery_address, dispatchedAt: h.dispatched_at, deliveredBy: h.delivered_by,
     };
   }
 
@@ -643,18 +687,27 @@ export function createApp(deps: AppDeps) {
       await exec(ops);
       throw new HttpError(401, 'wrong_code', attempts >= HANDOVER_MAX_ATTEMPTS ? 'Too many wrong codes. The office must start the handover again.' : 'That code is not correct.');
     }
-    const evidence = input.signature ? await uploadImage(input.signature, `ack-${h.handover_id}`) : '';
+    const sigOps: Op[] = [];
+    let evidence = '';
+    if (input.signature) {
+      checkImage(input.signature);
+      const st = await storeEvidence(ctx, actor, { entityType: 'handover', entityId: h.handover_id, complaintId: h.complaint_id, kind: 'signature', mime: input.signature.mime, dataBase64: input.signature.dataBase64, caption: `Signature of ${input.signatureName}` });
+      evidence = st.fileId;
+      sigOps.push(...st.ops);
+    }
     const t = iso();
-    const text = `I, ${input.signatureName}, confirm that I have physically received the item for complaint ${h.complaint_id} (found item ${h.item_id}) from the college office${h.receiver_type === 'proxy' ? ' on behalf of the owner, who authorised me' : ''}.`;
+    const delivery = h.mode === 'delivery';
+    const text = `I, ${input.signatureName}, confirm that I have physically received the item for complaint ${h.complaint_id} (found item ${h.item_id}) ${delivery ? `delivered to me by ${h.delivery_staff}` : 'from the college office'}${h.receiver_type === 'proxy' ? ' on behalf of the owner, who authorised me' : ''}.`;
     const r = await exec([
       {
         op: 'update', table: 'Handover_Records', value: h.handover_id, expectVersion: h.version,
-        patch: { status: 'Acknowledged', challenge_hash: '', receiver_uid: s.uid, acknowledged_at: t, signature_name: input.signatureName, acknowledgment_text: text, evidence_file_id: evidence, verification_method: `${h.receiver_type === 'proxy' ? 'proxy' : 'owner'} phone OTP + one-time desk code + ${h.receiver_id_type} (…${h.receiver_id_last4}) checked by staff` },
+        patch: { status: 'Acknowledged', challenge_hash: '', receiver_uid: s.uid, acknowledged_at: t, signature_name: input.signatureName, acknowledgment_text: text, evidence_file_id: evidence, verification_method: `${h.receiver_type === 'proxy' ? 'proxy' : 'owner'} phone OTP + one-time ${delivery ? 'doorstep' : 'desk'} code + ${h.receiver_id_type} (…${h.receiver_id_last4}) checked by ${delivery ? `delivery staff ${h.delivery_staff}` : 'staff'}` },
       },
-      update(h.complaint_id, 'receipt_acknowledged', `${h.receiver_type === 'proxy' ? 'Your authorised collector' : 'You'} confirmed receipt at the counter. Waiting for the office to confirm release.`, actor.id),
-      log(ctx, actor, 'receipt_acknowledged', 'Handover', h.handover_id, `${h.complaint_id} / ${h.item_id}`),
+      update(h.complaint_id, 'receipt_acknowledged', `${h.receiver_type === 'proxy' ? 'Your authorised collector' : 'You'} confirmed receipt${delivery ? ' of the delivery' : ' at the counter'}. Waiting for the office to confirm release.`, actor.id),
+      log(ctx, actor, 'receipt_acknowledged', 'Handover', h.handover_id, `${h.complaint_id} / ${h.item_id}${delivery ? ' (home delivery)' : ''}`),
+      ...sigOps,
     ]);
-    mustOk(r, 3, 'handover');
+    mustOk(r, 3 + sigOps.length, 'handover');
     return json({ ok: true, handoverId: h.handover_id, acknowledgedAt: t });
   };
 
@@ -868,7 +921,12 @@ export function createApp(deps: AppDeps) {
     photos.forEach(checkImage);
     const itemId = newId('FI');
     const ids: string[] = [];
-    for (const [i, p] of photos.entries()) ids.push(await store().uploadFile(`${itemId}-${i + 1}.${p.mime.split('/')[1]}`, p.mime, p.dataBase64));
+    const evOps: Op[] = [];
+    for (const p of photos) {
+      const st = await storeEvidence(ctx, staffActor(s), { entityType: 'found_item', entityId: itemId, complaintId: '', kind: 'item_photo', mime: p.mime, dataBase64: p.dataBase64, caption: '' });
+      ids.push(st.fileId);
+      evOps.push(...st.ops);
+    }
     const t = iso();
     const r = await exec([
       {
@@ -881,8 +939,9 @@ export function createApp(deps: AppDeps) {
         },
       },
       log(ctx, staffActor(s), 'found_item_registered', 'FoundItem', itemId, input.itemName),
+      ...evOps,
     ]);
-    mustOk(r, 2, 'found item');
+    mustOk(r, 2 + evOps.length, 'found item');
     return json({ ok: true, itemId }, 201);
   };
 
@@ -1020,6 +1079,11 @@ export function createApp(deps: AppDeps) {
         return { ...cl, complaint: c && { complaint_id: c.complaint_id, name: c.name, reporter_type: c.reporter_type, student_id: c.student_id, status: normalizeStatus(c.status), item_name: c.item_name, proxy_name: c.proxy_name, proxy_phone: maskPhone(c.proxy_phone), verified_phone: maskPhone(c.verified_phone) } };
       }),
       recent: rowsOf(r[1]).map((h) => handoverView(h, false)),
+      policy: await (async () => {
+        const st = await getSettings();
+        const admins = [...(await staffRoles()).entries()].filter(([, v]) => v.role === 'admin').map(([email]) => email);
+        return { homeDelivery: st.home_delivery_enabled === 'true', proofRequired: st.handover_proof_required === 'true', twoStaff: st.require_two_staff === 'true', deliveryStaff: [...new Set([...admins, ...bootstrapAdmins])].sort() };
+      })(),
     });
   };
 
@@ -1055,10 +1119,16 @@ export function createApp(deps: AppDeps) {
     }
     const status = normalizeStatus(c.status);
     if (status !== 'Ready for Collection' && status !== 'Awaiting Receiver Confirmation') throw new HttpError(409, 'invalid_transition', `Complaint is ${status}.`);
+    const delivery = input.mode === 'delivery';
+    if (delivery) {
+      if ((await getSettings()).home_delivery_enabled !== 'true') throw new HttpError(409, 'delivery_disabled', 'Home delivery is not enabled in Settings.');
+      if ((await roleOf(input.deliveryStaff)) !== 'admin') throw new HttpError(422, 'validation_failed', 'Delivery staff must be an active Main Admin staff member.', { deliveryStaff: 'Not an active staff member' });
+    }
     const handoverId = newId('HO');
-    const code = newHandoverCode();
+    // Counter: code shown now at the desk. Delivery: the assigned delivery staff issues the code at the doorstep.
+    const code = delivery ? '' : newHandoverCode();
     const t = iso();
-    const expires = new Date(now() + HANDOVER_CODE_TTL_MS).toISOString();
+    const expires = delivery ? '' : new Date(now() + HANDOVER_CODE_TTL_MS).toISOString();
     if (status === 'Ready for Collection') ops.push({ op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Awaiting Receiver Confirmation', updated_at: t }, expectVersion: c.version });
     ops.push(
       {
@@ -1068,16 +1138,17 @@ export function createApp(deps: AppDeps) {
           receiver_name: input.receiverName, receiver_id_checked: 'true', approved_by: cl.reviewed_by, handed_over_by: '', notes: input.notes,
           status: 'Pending Acknowledgment', started_by: s.email, reporter_uid: c.reporter_uid, receiver_type: input.receiverType, owner_authorization: ownerAuth,
           receiver_uid: '', receiver_phone: expectedPhone, receiver_id_type: input.receiverIdType, receiver_id_last4: input.receiverIdLast4.toUpperCase(),
-          verification_method: '', challenge_hash: await keyedHash(pepper, 'handover', handoverId, code), challenge_expires_at: expires, challenge_attempts: '0',
+          verification_method: '', challenge_hash: delivery ? '' : await keyedHash(pepper, 'handover', handoverId, code), challenge_expires_at: expires, challenge_attempts: '0',
           acknowledged_at: '', signature_name: '', acknowledgment_text: '', evidence_file_id: '', released_at: '', version: '1',
+          mode: input.mode, delivery_staff: delivery ? input.deliveryStaff : '', delivery_address: delivery ? input.deliveryAddress : '', dispatched_at: delivery ? t : '', delivered_at: '', delivered_by: '',
         },
       },
-      update(c.complaint_id, 'status', input.receiverType === 'proxy' ? `Collection started for your authorised collector ${input.receiverName}. They must confirm receipt on their phone.` : 'Collection started at the counter. Enter the code shown by the office in your portal to confirm receipt.', s.email, { itemId: f.item_id, data: { status: 'Awaiting Receiver Confirmation' } }),
-      log(ctx, staffActor(s), 'handover_started', 'Handover', handoverId, `${c.complaint_id} / ${f.item_id}; receiver ${input.receiverType}; ${input.receiverIdType} …${input.receiverIdLast4}`),
+      update(c.complaint_id, 'status', delivery ? 'Your item is out for home delivery. When it arrives, the delivery staff will give you a code to confirm receipt in your portal.' : input.receiverType === 'proxy' ? `Collection started for your authorised collector ${input.receiverName}. They must confirm receipt on their phone.` : 'Collection started at the counter. Enter the code shown by the office in your portal to confirm receipt.', s.email, { itemId: f.item_id, data: { status: 'Awaiting Receiver Confirmation' } }),
+      log(ctx, staffActor(s), 'handover_started', 'Handover', handoverId, `${c.complaint_id} / ${f.item_id}; receiver ${input.receiverType}; ${input.receiverIdType} …${input.receiverIdLast4}${delivery ? `; home delivery by ${input.deliveryStaff}` : ''}`),
     );
     mustOk(await exec(ops), ops.length, 'handover');
     // The code is shown once on the staff screen; only its keyed hash is stored.
-    return json({ ok: true, handoverId, code, expiresAt: expires, receiverPhone: maskPhone(expectedPhone) }, 201);
+    return json({ ok: true, handoverId, code: code || null, expiresAt: expires || null, mode: input.mode, receiverPhone: maskPhone(expectedPhone) }, 201);
   };
 
   async function loadHandover(id: string) {
@@ -1097,9 +1168,16 @@ export function createApp(deps: AppDeps) {
     const input = parse(releaseInput, await readJson(ctx.req));
     const h = await loadHandover(ctx.params.id);
     if (h.status === 'Released') throw new HttpError(409, 'already_released', 'This item has already been released.');
-    if (h.status !== 'Acknowledged' || !h.receiver_uid || !h.acknowledged_at) throw new HttpError(409, 'not_acknowledged', 'The receiver has not confirmed receipt yet.');
+    const delivery = h.mode === 'delivery';
+    if (!h.receiver_uid || !h.acknowledged_at || !['Acknowledged', 'Delivered'].includes(h.status)) throw new HttpError(409, 'not_acknowledged', 'The receiver has not confirmed receipt yet.');
+    if (delivery && (h.status !== 'Delivered' || !h.delivered_at)) throw new HttpError(409, 'not_delivered', 'The delivery staff has not recorded the delivery and its proof yet.');
     const settings = await getSettings();
     if (settings.require_two_staff === 'true' && h.approved_by === s.email) throw new HttpError(409, 'two_staff_required', 'A different staff member from the claim approver must confirm release.');
+    if (settings.require_two_staff === 'true' && delivery && h.delivered_by === s.email) throw new HttpError(409, 'two_staff_required', 'A different staff member from the delivery staff must finalise the delivery.');
+    if (!delivery && settings.handover_proof_required === 'true') {
+      const proof = (await evidenceFor('handover', h.handover_id)).filter((e) => e.kind === 'handover_photo' || e.kind === 'handover_document');
+      if (!proof.length) throw new HttpError(409, 'proof_required', 'College policy requires a handover photo or document. Upload it in Proof of Handover first.');
+    }
     const r1 = await exec([
       { op: 'get', table: 'Complaints', value: h.complaint_id },
       { op: 'get', table: 'Found_Items', value: h.item_id },
@@ -1118,7 +1196,7 @@ export function createApp(deps: AppDeps) {
       { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { status: 'Returned', updated_at: t, retention_until: retentionUntil(settings) }, expectVersion: c.version },
       { op: 'update', table: 'Found_Items', value: f.item_id, patch: { status: 'Returned', updated_at: t } },
       update(c.complaint_id, 'status', `Item returned. Handover receipt ${h.handover_id}.`, s.email, { itemId: f.item_id, data: { status: 'Returned' } }),
-      log(ctx, staffActor(s), 'item_released', 'Handover', h.handover_id, `${c.complaint_id} / ${f.item_id}; receiver ${h.receiver_type} ${h.receiver_name}; approved by ${h.approved_by}; acknowledged ${h.acknowledged_at}`),
+      log(ctx, staffActor(s), 'item_released', 'Handover', h.handover_id, `${c.complaint_id} / ${f.item_id}; receiver ${h.receiver_type} ${h.receiver_name}; approved by ${h.approved_by}; acknowledged ${h.acknowledged_at}${delivery ? `; delivered by ${h.delivered_by} at ${h.delivered_at}` : ''}`),
     ]);
     mustOk(r, 6, 'handover');
     return json({ ok: true, handoverId: h.handover_id, releasedAt: t });
@@ -1140,6 +1218,93 @@ export function createApp(deps: AppDeps) {
     ops.push(log(ctx, staffActor(s), 'handover_cancelled', 'Handover', h.handover_id, reason));
     mustOk(await exec(ops), ops.length, 'handover');
     return json({ ok: true });
+  };
+
+  // ------------------------------------------------------------ evidence + home delivery
+  const foundEvidenceUpload: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(evidenceUpload, await readJson(ctx.req, 7_500_000));
+    if (input.kind !== 'item_photo') throw new HttpError(422, 'validation_failed', 'Found items take item photos.', { kind: 'item_photo only' });
+    const f = rowOf((await exec([{ op: 'get', table: 'Found_Items', value: ctx.params.id }]))[0]);
+    if (!f) throw new HttpError(404, 'not_found', 'Item not found.');
+    if ((await evidenceFor('found_item', f.item_id)).length >= MAX_EVIDENCE_PER_ENTITY) throw new HttpError(409, 'too_many_files', `At most ${MAX_EVIDENCE_PER_ENTITY} files per item.`);
+    const st = await storeEvidence(ctx, staffActor(s), { entityType: 'found_item', entityId: f.item_id, complaintId: f.matched_complaint_id, kind: input.kind, mime: input.mime, dataBase64: input.dataBase64, caption: input.caption });
+    const ops: Op[] = [...st.ops];
+    if (input.mime !== 'application/pdf') ops.push({ op: 'update', table: 'Found_Items', value: f.item_id, patch: { photo_file_ids: [f.photo_file_ids, st.fileId].filter(Boolean).join(','), updated_at: iso() } });
+    mustOk(await exec(ops), ops.length, 'evidence');
+    return json({ ok: true, evidenceId: st.evidenceId }, 201);
+  };
+
+  const handoverEvidenceUpload: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(evidenceUpload, await readJson(ctx.req, 7_500_000));
+    if (input.kind === 'item_photo') throw new HttpError(422, 'validation_failed', 'Choose a handover evidence type.', { kind: 'Invalid' });
+    const h = await loadHandover(ctx.params.id);
+    // Evidence is frozen once a handover is finalised or cancelled: nothing can be added, replaced or removed afterwards.
+    if (!['Pending Acknowledgment', 'Acknowledged', 'Delivered'].includes(h.status)) throw new HttpError(409, 'evidence_locked', `Evidence is locked: handover is ${h.status || 'Released'}.`);
+    if (input.kind === 'delivery_proof') {
+      if (h.mode !== 'delivery') throw new HttpError(409, 'not_delivery', 'Delivery proof applies to home deliveries only.');
+      if (h.delivery_staff !== s.email) throw new HttpError(403, 'forbidden', 'Only the assigned delivery staff can upload delivery proof.');
+    }
+    if ((await evidenceFor('handover', h.handover_id)).length >= MAX_EVIDENCE_PER_ENTITY) throw new HttpError(409, 'too_many_files', `At most ${MAX_EVIDENCE_PER_ENTITY} files per handover.`);
+    const st = await storeEvidence(ctx, staffActor(s), { entityType: 'handover', entityId: h.handover_id, complaintId: h.complaint_id, kind: input.kind, mime: input.mime, dataBase64: input.dataBase64, caption: input.caption });
+    mustOk(await exec(st.ops), st.ops.length, 'evidence');
+    return json({ ok: true, evidenceId: st.evidenceId }, 201);
+  };
+
+  const deliveryCode: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const { pepper } = secrets();
+    const h = await loadHandover(ctx.params.id);
+    if (h.mode !== 'delivery') throw new HttpError(409, 'not_delivery', 'This is a counter handover.');
+    if (h.delivery_staff !== s.email) throw new HttpError(403, 'forbidden', 'Only the assigned delivery staff can issue the doorstep code.');
+    if (h.status !== 'Pending Acknowledgment') throw new HttpError(409, 'already_used', `Handover is ${h.status}.`);
+    const code = newHandoverCode();
+    const expires = new Date(now() + HANDOVER_CODE_TTL_MS).toISOString();
+    const ops: Op[] = [
+      { op: 'update', table: 'Handover_Records', value: h.handover_id, patch: { challenge_hash: await keyedHash(pepper, 'handover', h.handover_id, code), challenge_expires_at: expires }, expectVersion: h.version },
+      log(ctx, staffActor(s), 'delivery_code_issued', 'Handover', h.handover_id, h.complaint_id),
+    ];
+    mustOk(await exec(ops), 2, 'handover');
+    return json({ ok: true, code, expiresAt: expires, receiverPhone: maskPhone(h.receiver_phone) });
+  };
+
+  const markDelivered: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(deliveredInput, await readJson(ctx.req));
+    const h = await loadHandover(ctx.params.id);
+    if (h.mode !== 'delivery') throw new HttpError(409, 'not_delivery', 'This is a counter handover.');
+    if (h.delivery_staff !== s.email) throw new HttpError(403, 'forbidden', 'Only the assigned delivery staff can record the delivery.');
+    if (h.status === 'Delivered' || h.status === 'Released') throw new HttpError(409, 'already_delivered', 'Delivery already recorded.');
+    if (h.status !== 'Acknowledged' || !h.acknowledged_at) throw new HttpError(409, 'not_acknowledged', 'The recipient has not confirmed receipt yet.');
+    const proof = (await evidenceFor('handover', h.handover_id)).filter((e) => e.kind === 'delivery_proof');
+    if (!proof.length) throw new HttpError(409, 'proof_required', 'Upload a delivery proof photo first.');
+    const t = iso();
+    const ops: Op[] = [
+      { op: 'update', table: 'Handover_Records', value: h.handover_id, patch: { status: 'Delivered', delivered_at: t, delivered_by: s.email, notes: [h.notes, input.notes && `Delivery: ${input.notes}`].filter(Boolean).join('\n').slice(0, 1000) }, expectVersion: h.version },
+      log(ctx, staffActor(s), 'item_delivered', 'Handover', h.handover_id, `${h.complaint_id}; ${proof.length} proof file(s); awaiting staff finalisation`),
+    ];
+    mustOk(await exec(ops), 2, 'handover');
+    return json({ ok: true, deliveredAt: t });
+  };
+
+  const ENTITY_TYPES = new Set(['found_item', 'handover']);
+  const listEvidence = (redact: boolean): Handler => async ({ req, url }) => {
+    if (redact) await requireMonitor(req); else await requireAdmin(req);
+    const type = url.searchParams.get('type') ?? '';
+    const id = url.searchParams.get('id') ?? '';
+    if (!ENTITY_TYPES.has(type) || !/^(FI|HO)-[0-9A-Z]{8}$/.test(id)) throw new HttpError(422, 'validation_failed', 'type and id are required.');
+    return json({ ok: true, rows: (await evidenceFor(type, id)).map((e) => evidenceView(e, redact)) });
+  };
+  const evidenceFile = (redact: boolean): Handler => async (ctx) => {
+    const s = redact ? await requireMonitor(ctx.req) : await requireAdmin(ctx.req);
+    const e = rowsOf((await exec([{ op: 'query', table: 'Evidence_Files', where: { evidence_id: ctx.params.id }, limit: 1 }]))[0])[0];
+    if (!e) throw new HttpError(404, 'not_found', 'Evidence not found.');
+    if (redact && e.kind === 'signature') throw new HttpError(403, 'withheld', 'Receiver signatures are visible to Main Admin only.');
+    if (redact) await exec([log(ctx, staffActor(s), 'evidence_viewed', e.entity_type === 'found_item' ? 'FoundItem' : 'Handover', e.entity_id, e.evidence_id)]).catch(() => undefined);
+    const res = await fileResponse(e.file_id);
+    if (e.mime === 'application/pdf') res.headers.set('content-disposition', `inline; filename="${e.evidence_id}.pdf"`);
+    return res;
   };
 
   // ------------------------------------------------------------ admin: other
@@ -1178,7 +1343,7 @@ export function createApp(deps: AppDeps) {
       if (!(key in incoming)) continue;
       const value = String(incoming[key] ?? '').trim().slice(0, 300);
       if ((key === 'unclaimed_days' || key === 'retention_days') && !/^\d{1,4}$/.test(value)) throw new HttpError(422, 'validation_failed', `${key} must be a number of days.`, { [key]: 'Number of days' });
-      if (['require_two_staff', 'submissions_open', 'guest_reports_open'].includes(key) && !['true', 'false'].includes(value)) throw new HttpError(422, 'validation_failed', `${key} must be true or false.`);
+      if (['require_two_staff', 'submissions_open', 'guest_reports_open', 'home_delivery_enabled', 'handover_proof_required'].includes(key) && !['true', 'false'].includes(value)) throw new HttpError(422, 'validation_failed', `${key} must be true or false.`);
       if (existing.some((r) => r.key === key)) ops.push({ op: 'update', table: 'Application_Settings', value: key, patch: { value, updated_at: t, updated_by: s.email } });
       else ops.push({ op: 'append', table: 'Application_Settings', row: { key, value, updated_at: t, updated_by: s.email } });
     }
@@ -1451,7 +1616,7 @@ export function createApp(deps: AppDeps) {
     await requireMonitor(req);
     const status = url.searchParams.get('status') ?? '';
     const r = await exec([{ op: 'query', table: 'Handover_Records', limit: 200 }]);
-    const rows = rowsOf(r[0]).map((h) => { const v = handoverView(h, true); return { ...v, approvedBy: h.approved_by, startedBy: h.started_by, releasedBy: h.handed_over_by }; }).filter((h) => !status || h.status === status);
+    const rows = rowsOf(r[0]).map((h) => { const v = handoverView(h, true); return { ...v, approvedBy: h.approved_by, startedBy: h.started_by, releasedBy: h.handed_over_by, deliveryStaff: h.delivery_staff, deliveredBy: h.delivered_by }; }).filter((h) => !status || h.status === status);
     return json({ ok: true, rows });
   };
 
@@ -1494,7 +1659,7 @@ export function createApp(deps: AppDeps) {
 
   // ------------------------------------------------------------ router
   const CID = '(?<id>FB-[0-9A-Z]{4}-[0-9A-Z]{4})';
-  const R = (s: string) => new RegExp(`^${s.replace(':cid', CID).replace(':fi', '(?<id>FI-[0-9A-Z]{8})').replace(':cl', '(?<id>CL-[0-9A-Z]{8})').replace(':ho', '(?<id>HO-[0-9A-Z]{8})')}$`);
+  const R = (s: string) => new RegExp(`^${s.replace(':cid', CID).replace(':fi', '(?<id>FI-[0-9A-Z]{8})').replace(':cl', '(?<id>CL-[0-9A-Z]{8})').replace(':ho', '(?<id>HO-[0-9A-Z]{8})').replace(':ev', '(?<id>EV-[0-9A-Z]{8})')}$`);
   const routes: [string, RegExp, Handler][] = [
     ['GET', R('/api/health'), health],
     ['GET', R('/api/public/config'), publicConfig],
@@ -1527,6 +1692,7 @@ export function createApp(deps: AppDeps) {
     ['POST', R('/api/staff/found-items'), createFound],
     ['GET', R('/api/staff/found-items/:fi'), getFound],
     ['POST', R('/api/staff/found-items/:fi/status'), setFoundStatus],
+    ['POST', R('/api/staff/found-items/:fi/evidence'), foundEvidenceUpload],
     ['GET', R('/api/staff/claims'), listClaims],
     ['POST', R('/api/staff/claims/:cl/decision'), decideClaim],
     ['GET', R('/api/staff/handovers'), listHandovers],
@@ -1534,6 +1700,11 @@ export function createApp(deps: AppDeps) {
     ['GET', R('/api/staff/handovers/:ho'), getHandover],
     ['POST', R('/api/staff/handovers/:ho/release'), releaseHandover],
     ['POST', R('/api/staff/handovers/:ho/cancel'), cancelHandover],
+    ['POST', R('/api/staff/handovers/:ho/evidence'), handoverEvidenceUpload],
+    ['POST', R('/api/staff/handovers/:ho/delivery-code'), deliveryCode],
+    ['POST', R('/api/staff/handovers/:ho/delivered'), markDelivered],
+    ['GET', R('/api/staff/evidence'), listEvidence(false)],
+    ['GET', R('/api/staff/evidence/:ev/file'), evidenceFile(false)],
     ['GET', R('/api/staff/unclaimed'), unclaimed],
     ['GET', R('/api/staff/activity'), activity],
     ['GET', R('/api/staff/settings'), getSettingsRoute],
@@ -1556,6 +1727,8 @@ export function createApp(deps: AppDeps) {
     ['GET', R('/api/mgmt/found-items'), mgmtFound],
     ['GET', R('/api/mgmt/handovers'), mgmtHandovers],
     ['GET', R('/api/mgmt/audit'), mgmtAudit],
+    ['GET', R('/api/mgmt/evidence'), listEvidence(true)],
+    ['GET', R('/api/mgmt/evidence/:ev/file'), evidenceFile(true)],
     ['GET', R('/api/mgmt/export'), mgmtExport],
   ];
   const PUBLIC_STAFF = new Set(['/api/staff/session', '/api/staff/me']);
