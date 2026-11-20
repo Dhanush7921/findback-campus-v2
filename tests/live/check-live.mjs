@@ -19,7 +19,31 @@ await p.goto(U, { waitUntil: 'networkidle' });
 await p.locator('main a[href$="/guest"]').first().click();
 await p.waitForURL(/\/guest$/);
 results.push(`client nav -> ${p.url()}`);
+// Live CEO demo: Explore Demo -> each role signs in one-click on the in-browser demo engine.
+const demoApiHits = [];
+p.on('request', (r) => { if (/run\.app|googleapis|firebase|identitytoolkit/.test(r.url())) demoApiHits.push(r.url()); });
+await p.goto(U, { waitUntil: 'networkidle' });
+await p.getByTestId('explore-demo').click();
+await p.waitForURL(/\/demo$/);
+for (const [role, landing, text] of [['student', /\/me$/, 'Brown leather wallet'], ['guest', /\/me$/, 'car keys'], ['admin', /\/staff$/, 'Dashboard'], ['management', /\/management$/, '']]) {
+  await p.goto(U + 'demo', { waitUntil: 'networkidle' });
+  await p.getByTestId(`demo-${role}`).getByRole('button', { name: /Enter demo as/ }).click();
+  await p.waitForURL(landing, { timeout: 20000 });
+  await p.getByTestId('demo-banner').getByText('DEMO MODE — SAMPLE DATA ONLY').waitFor({ timeout: 10000 });
+  if (text) await p.getByText(text, { exact: false }).first().waitFor({ timeout: 15000 });
+  await p.screenshot({ path: `live-demo-${role}.png`, fullPage: false });
+  results.push(`demo ${role} -> ${p.url()}`);
+}
+await p.goto(U + 'demo', { waitUntil: 'networkidle' });
+const card = p.getByTestId('demo-admin');
+await card.getByLabel('Username').fill('admin@demo.findback');
+await card.getByLabel('Password').fill('Admin@123');
+await card.getByRole('button', { name: 'Sign in' }).click();
+await p.waitForURL(/\/staff$/, { timeout: 20000 });
+results.push(`demo typed credentials -> ${p.url()}`);
+results.push(`demo requests to real backend: ${demoApiHits.length}`);
 console.log(results.join('\n'));
+if (demoApiHits.length) { console.error('demo reached a real backend:', demoApiHits); process.exit(1); }
 // API errors are expected until the backend is configured; report them separately.
 const apiErr = errors.filter((e) => /fetch|api|network/i.test(e));
 // Deep links load 404.html (status 404) by design; failing sub-resources are tracked separately below.

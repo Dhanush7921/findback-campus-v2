@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { StatusBadge } from '../../components/status';
 import { useToast } from '../../components/toast';
+import { COMPLAINT_FIELDS, EditModal } from '../../components/EditForms';
 import { Button, Card, ErrorState, Field, Input, PageHeader, PageSkeleton, Select, Textarea, fmtDate } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
 import { useStaffGet, type R } from './common';
@@ -43,6 +44,7 @@ export default function ComplaintDetail() {
   const [note, setNote] = useState('');
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!d) return <PageSkeleton />;
   const c = d.complaint;
@@ -53,7 +55,8 @@ export default function ComplaintDetail() {
   const manual = d.allowedTransitions;
   return (
     <>
-      <PageHeader eyebrow={<Link to="/staff/complaints" className="hover:underline">← Complaints</Link>} title={<span className="font-mono">{c.complaint_id}</span>} lead={`${c.item_name} · submitted ${fmtDate(c.created_at)}`} actions={<StatusBadge status={c.status} translate={false} />} />
+      <PageHeader eyebrow={<Link to="/staff/complaints" className="hover:underline">← Complaints</Link>} title={<span className="font-mono">{c.complaint_id}</span>} lead={`${c.item_name} · submitted ${fmtDate(c.created_at)}`} actions={<div className="flex items-center gap-2"><StatusBadge status={c.status} translate={false} />{!['Returned', 'Closed'].includes(c.status) && <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>Edit details</Button>}</div>} />
+      {editing && <EditModal open title="Edit complaint details" fields={COMPLAINT_FIELDS} reason note="The verified reporter identity cannot be edited. Status changes use the workflow below." initial={{ category: c.category, itemName: c.item_name, description: c.description, colorFeatures: c.color_features, lastSeenLocation: c.last_seen_location, lostDate: c.lost_date, lostTime: c.lost_time }} onClose={() => setEditing(false)} onSave={async (v) => { await apiPost(`/api/staff/complaints/${c.complaint_id}/edit`, v, { auth: 'staff' }); await reload(); }} />}
       <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
         <div className="space-y-5">
           <Card className="divide-y divide-silver-100">

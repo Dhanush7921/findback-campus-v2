@@ -5,6 +5,7 @@ import { useToast } from '../../components/toast';
 import { Button, Card, ErrorState, Field, Input, PageHeader, PageSkeleton, Select, fmtDate } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
 import { useStaffGet, type R } from './common';
+import { EditModal, FOUND_FIELDS } from '../../components/EditForms';
 import { EvidenceGallery, EvidencePicker, uploadEvidence, type PendingFile } from './Evidence';
 
 export default function ItemDetail() {
@@ -16,6 +17,7 @@ export default function ItemDetail() {
   const [busy, setBusy] = useState<string | null>(null);
   const [newPhotos, setNewPhotos] = useState<PendingFile[]>([]);
   const [evKey, setEvKey] = useState(0);
+  const [editing, setEditing] = useState(false);
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return <PageSkeleton />;
   const i = data.item;
@@ -25,7 +27,8 @@ export default function ItemDetail() {
   };
   return (
     <>
-      <PageHeader eyebrow={<Link to="/staff/inventory" className="hover:underline">← Inventory</Link>} title={i.item_name} lead={<span className="font-mono">{i.item_id}</span>} actions={<StatusBadge status={i.status} />} />
+      <PageHeader eyebrow={<Link to="/staff/inventory" className="hover:underline">← Inventory</Link>} title={i.item_name} lead={<span className="font-mono">{i.item_id}</span>} actions={<div className="flex items-center gap-2"><StatusBadge status={i.status} />{i.status !== 'Returned' && <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>Edit item</Button>}</div>} />
+      {editing && <EditModal open title="Edit found item" fields={FOUND_FIELDS} reason initial={{ category: i.category, itemName: i.item_name, publicDescription: i.public_description, privateDetails: i.private_details, colorFeatures: i.color_features, foundLocation: i.found_location, foundDate: i.found_date, foundTime: i.found_time ?? '', storageLocation: i.storage_location }} onClose={() => setEditing(false)} onSave={async (v) => { await apiPost(`/api/staff/found-items/${i.item_id}/edit`, v, { auth: 'staff' }); await reload(); }} />}
       <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
         <div className="space-y-5">
           <Card className="divide-y divide-silver-100">
@@ -49,7 +52,7 @@ export default function ItemDetail() {
           </Card>
         </div>
         <div className="space-y-5">
-          <EvidenceGallery type="found_item" id={i.item_id} scope="staff" title="Item photos & evidence" refreshKey={evKey} />
+          <EvidenceGallery type="found_item" id={i.item_id} scope="staff" title="Item photos & evidence" refreshKey={evKey} canArchive={i.status !== 'Returned'} onChanged={() => setEvKey((k) => k + 1)} />
           <Card className="space-y-3 p-4">
             <EvidencePicker files={newPhotos} onChange={setNewPhotos} label="Add photos" max={12} />
             {newPhotos.length > 0 && <Button size="sm" loading={busy === 'photos'} onClick={() => act('photos', async () => { const f = await uploadEvidence(`/api/staff/found-items/${i.item_id}/evidence`, newPhotos, 'item_photo'); if (f) throw new Error(`${f} photo(s) failed to upload`); setNewPhotos([]); setEvKey((k) => k + 1); }, 'Photos added to evidence')}>Upload {newPhotos.length} photo(s)</Button>}

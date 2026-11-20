@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useToast } from '../../components/toast';
+import { EditModal } from '../../components/EditForms';
 import { Button, Card, EmptyState, ErrorState, Field, Input, Notice, PageHeader, PageSkeleton, Select, Textarea, fmtDate } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
 import { useStaffGet, type R } from './common';
@@ -14,6 +15,7 @@ function ClaimCard({ row, onDone }: { row: Row; onDone: () => void }) {
   const [notes, setNotes] = useState('');
   const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [noting, setNoting] = useState(false);
   const { claim, complaint: c, item: i } = row;
   const decide = async (decision: 'approve' | 'reject' | 'dispute') => {
     setBusy(decision);
@@ -61,7 +63,9 @@ function ClaimCard({ row, onDone }: { row: Row; onDone: () => void }) {
           </div>
         </div>
       )}
-      {!pending && claim.decision_notes && <Notice tone="info" className="mt-4">{claim.reviewed_by}: {claim.decision_notes}</Notice>}
+      {!pending && claim.decision_notes && <Notice tone="info" className="mt-4"><span className="whitespace-pre-line">{claim.reviewed_by}: {claim.decision_notes}</span></Notice>}
+      {!pending && <Button size="sm" variant="ghost" className="mt-2" onClick={() => setNoting(true)}>Add correction note</Button>}
+      {noting && <EditModal open title="Add a correction to the review notes" fields={[{ key: 'note', label: 'Correction', type: 'textarea', required: true, max: 500 }]} note="The original decision notes are kept. Your correction is appended with your name and the time." initial={{ note: '' }} onClose={() => setNoting(false)} onSave={async (v) => { await apiPost(`/api/staff/claims/${claim.claim_id}/notes`, { note: v.note }, { auth: 'staff' }); onDone(); }} />}
     </Card>
   );
 }

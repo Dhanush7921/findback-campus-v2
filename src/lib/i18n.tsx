@@ -210,7 +210,7 @@ const en = {
   'auth.limit': "Too many codes requested for this number on this device. Try again later.",
   'auth.notRegistered': "Not a registered student? Use Guest reporting.",
   'auth.lostPhone': "Lost your phone or changed your number? Visit the lost & found office with your college ID to update your registered number.",
-  'auth.devNote': "Development mode: use code 123456.",
+  'auth.devNote': "Demo / development mode: the code is simulated. Use 123456.",
   'me.student': "College-verified student",
   'me.guest': "Phone-verified guest",
   'me.hello': "Hello",

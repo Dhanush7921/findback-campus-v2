@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router';
+import DemoBanner from './components/DemoBanner';
 import Layout from './components/Layout';
 import { ToastProvider } from './components/toast';
 import { PageSkeleton } from './components/ui';
@@ -13,6 +14,7 @@ const Help = lazy(() => import('./pages/public/Help'));
 const Privacy = lazy(() => import('./pages/public/Privacy'));
 const NotFound = lazy(() => import('./pages/public/NotFound'));
 const PhoneLogin = lazy(() => import('./pages/auth/PhoneLogin'));
+const DemoLogin = lazy(() => import('./pages/public/DemoLogin'));
 
 const MeLayout = lazy(() => import('./pages/me/MeLayout'));
 const MeDashboard = lazy(() => import('./pages/me/Dashboard'));
@@ -54,6 +56,7 @@ export default function App() {
       <ToastProvider>
         <ConfigProvider>
           <Router basename={IS_NATIVE ? undefined : import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
+            <DemoBanner />
             <Suspense fallback={<PageSkeleton />}>
               <Routes>
                 <Route element={<Layout />}>
@@ -63,6 +66,7 @@ export default function App() {
                   <Route path="privacy" element={<Privacy />} />
                   <Route path="student" element={<PhoneLogin portal="student" />} />
                   <Route path="guest" element={<PhoneLogin portal="guest" />} />
+                  <Route path="demo" element={<DemoLogin />} />
                   <Route path="report" element={<Navigate to="/student" replace />} />
                   <Route path="track" element={<Navigate to="/student" replace />} />
                   <Route path="me" element={<MeLayout />}>

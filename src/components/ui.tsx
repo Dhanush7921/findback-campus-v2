@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw } from 'lucide-react';
-import { forwardRef, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, X } from 'lucide-react';
+import { forwardRef, useEffect, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { Link, type LinkProps } from 'react-router';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'soft';
@@ -145,11 +145,17 @@ export function PageHeader({ eyebrow, title, lead, actions }: { eyebrow?: ReactN
 }
 
 export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink-900/30 p-0 backdrop-blur-sm sm:items-center sm:p-6 animate-fade" onClick={onClose} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label={title} className="card max-h-[90dvh] w-full max-w-lg overflow-auto rounded-b-none p-6 sm:rounded-b-[var(--radius-xl2)] animate-rise safe-bottom" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-        <h2 className="mb-4 text-lg font-bold">{title}</h2>
+      <div role="dialog" aria-modal="true" aria-label={title} className="card max-h-[90dvh] w-full max-w-lg overflow-auto rounded-b-none p-6 sm:rounded-b-[var(--radius-xl2)] animate-rise safe-bottom" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-lg font-bold">{title}</h2><button type="button" aria-label="Close" onClick={onClose} className="-mr-2 -mt-1 grid h-9 w-9 shrink-0 place-items-center rounded-full text-ink-500 hover:bg-silver-100"><X className="h-5 w-5" /></button></div>
         {children}
       </div>
     </div>

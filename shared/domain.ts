@@ -130,11 +130,13 @@ export const TABLES = {
     'evidence_id', 'created_at', 'entity_type', 'entity_id', 'complaint_id', 'kind', 'file_id', 'mime', 'bytes', 'sha256',
     'uploaded_by', 'uploaded_role', 'caption',
   ],
+  // Append-only archive markers: evidence is never deleted, only hidden from active views with a reason.
+  Evidence_Archive: ['archive_id', 'created_at', 'evidence_id', 'entity_type', 'entity_id', 'archived_by', 'reason'],
 } as const;
 export type TableName = keyof typeof TABLES;
 export type Row = Record<string, string>;
 /** Tables that the application may only append to. */
-export const APPEND_ONLY: TableName[] = ['Activity_Log', 'Complaint_Updates', 'Evidence_Files'];
+export const APPEND_ONLY: TableName[] = ['Activity_Log', 'Complaint_Updates', 'Evidence_Files', 'Evidence_Archive'];
 
 /** Key column per table (unique, used for get/update). */
 export const TABLE_KEYS: Record<TableName, string> = {
@@ -150,6 +152,7 @@ export const TABLE_KEYS: Record<TableName, string> = {
   Guest_Identities: 'uid',
   Staff_Roles: 'email',
   Evidence_Files: 'evidence_id',
+  Evidence_Archive: 'archive_id',
 };
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
@@ -301,6 +304,37 @@ export const handoverStartInput = z.object({
   if (v.mode !== 'delivery') return;
   if (!z.email().safeParse(v.deliveryStaff).success) ctx.addIssue({ code: 'custom', path: ['deliveryStaff'], message: 'Choose the delivery staff member' });
   if (v.deliveryAddress.length < 10) ctx.addIssue({ code: 'custom', path: ['deliveryAddress'], message: 'Enter the delivery address' });
+});
+
+// ---------- Manual edits / corrections (identity fields are never editable) ----------
+const reason = clean(300, 3);
+export const complaintEditInput = z.object({
+  category: z.enum(CATEGORIES),
+  itemName: clean(80, 2),
+  description: clean(1000, 10),
+  colorFeatures: clean(300, 2),
+  lastSeenLocation: clean(160, 2),
+  lostDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Pick a date').refine(dateOk, 'Date must be within the last year and not in the future'),
+  lostTime: optionalClean(5).refine((v) => v === '' || /^\d{2}:\d{2}$/.test(v), 'Invalid time'),
+});
+export const staffComplaintEditInput = complaintEditInput.extend({ reason });
+export const myComplaintEditInput = complaintEditInput.extend({ ownershipEvidence: clean(1000, 10) });
+export const staffComplaintCreateInput = complaintEditInput.extend({
+  reporterName: clean(80, 2),
+  reporterContact: optionalClean(60),
+  studentId: optionalClean(30),
+  ownershipEvidence: clean(1000, 10),
+  reason,
+});
+export const foundItemEditInput = foundItemInput.extend({ reason });
+export const archiveInput = z.object({ reason });
+export const claimNoteInput = z.object({ note: clean(500, 3) });
+export const handoverCorrectionInput = z.object({
+  receiverName: optionalClean(80),
+  receiverIdType: z.enum(['', 'College ID card', 'Aadhaar', 'Driving licence', 'Passport', 'Voter ID', 'Other government ID']).default(''),
+  receiverIdLast4: z.string().optional().default('').refine((v) => v === '' || /^[A-Za-z0-9]{4}$/.test(v), 'Last 4 characters only'),
+  note: optionalClean(500),
+  reason,
 });
 
 export const deliveredInput = z.object({

@@ -1,4 +1,4 @@
-import { ArrowRight, BadgeCheck, BarChart3, GraduationCap, Lock, MapPin, ShieldCheck, Smartphone, UserCog, UserRound, Users } from 'lucide-react';
+import { PlayCircle, ArrowRight, BadgeCheck, BarChart3, GraduationCap, Lock, MapPin, ShieldCheck, Smartphone, UserCog, UserRound, Users } from 'lucide-react';
 import { Link } from 'react-router';
 import { HeroArt } from '../../components/art';
 import { ButtonLink, Card } from '../../components/ui';
@@ -31,6 +31,7 @@ export default function Home() {
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <ButtonLink to="/student" size="lg">{t('v2.studentT')} <ArrowRight className="h-5 w-5" /></ButtonLink>
             <ButtonLink to="/guest" size="lg" variant="secondary">{t('v2.guestT')}</ButtonLink>
+            <ButtonLink to="/demo" size="lg" variant="soft" data-testid="explore-demo"><PlayCircle className="h-5 w-5" /> Explore Demo</ButtonLink>
           </div>
           <ul className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-ink-500">
             {[[Smartphone, t('home.trust1')], [Lock, t('home.trust2')], [BadgeCheck, t('home.trust3')]].map(([Icon, label]) => {

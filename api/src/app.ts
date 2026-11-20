@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  acknowledgeInput, claimDecisionInput, deliveredInput, evidenceUpload, MAX_EVIDENCE_BYTES, MAX_EVIDENCE_PER_ENTITY, claimInput, complaintInput, DEFAULT_SETTINGS, EDITABLE_SETTINGS,
+  acknowledgeInput, archiveInput, claimDecisionInput, claimNoteInput, deliveredInput, foundItemEditInput, handoverCorrectionInput, myComplaintEditInput, staffComplaintCreateInput, staffComplaintEditInput, evidenceUpload, MAX_EVIDENCE_BYTES, MAX_EVIDENCE_PER_ENTITY, claimInput, complaintInput, DEFAULT_SETTINGS, EDITABLE_SETTINGS,
   foundItemInput, FOUND_ITEM_STATUSES, handoverStartInput, imageUpload, MAX_IMAGE_BYTES, maskPhone, maskSensitive,
   normalizeStatus, OPEN_STATUSES, portalUpdateInput, proxyInput, registryRowInput, releaseInput, staffRoleInput,
   statusUpdateInput, STATUS_TRANSITIONS, WORKFLOW_STATUSES, type ComplaintStatus, type Row, type StaffRole,
@@ -172,8 +172,17 @@ export function createApp(deps: AppDeps) {
       ],
     };
   }
-  async function evidenceFor(entityType: string, entityId: string) {
-    return rowsOf((await exec([{ op: 'query', table: 'Evidence_Files', where: { entity_type: entityType, entity_id: entityId }, limit: 200, order: 'asc' }]))[0]);
+  async function evidenceFor(entityType: string, entityId: string, includeArchived = false) {
+    const r = await exec([
+      { op: 'query', table: 'Evidence_Files', where: { entity_type: entityType, entity_id: entityId }, limit: 200, order: 'asc' },
+      { op: 'query', table: 'Evidence_Archive', where: { entity_type: entityType, entity_id: entityId }, limit: 200 },
+    ]);
+    const archived = new Map(rowsOf(r[1]).map((a) => [a.evidence_id, a]));
+    return rowsOf(r[0]).map((e) => ({ ...e, archived_reason: archived.get(e.evidence_id)?.reason ?? '', archived_by: archived.get(e.evidence_id)?.archived_by ?? '' }) as Row).filter((e) => includeArchived || !e.archived_reason);
+  }
+  /** Human-readable before → after list for the audit log. */
+  function diff(before: Row, after: Record<string, string>) {
+    return Object.entries(after).filter(([k, v]) => (before[k] ?? '') !== v).map(([k, v]) => `${k}: "${(before[k] ?? '').slice(0, 60)}" → "${v.slice(0, 60)}"`);
   }
   function evidenceView(e: Row, redact: boolean) {
     const withheld = redact && e.kind === 'signature';
@@ -181,6 +190,7 @@ export function createApp(deps: AppDeps) {
       evidenceId: e.evidence_id, createdAt: e.created_at, entityType: e.entity_type, entityId: e.entity_id, complaintId: e.complaint_id, kind: e.kind,
       mime: e.mime, bytes: Number(e.bytes) || 0, sha256: e.sha256, uploadedBy: redact && e.uploaded_role !== 'admin' ? 'Receiver (verified phone)' : e.uploaded_by,
       uploadedRole: e.uploaded_role, caption: redact ? maskSensitive(e.caption) : e.caption, withheld,
+      archived: Boolean(e.archived_reason), archivedReason: redact ? '' : e.archived_reason, archivedBy: redact ? '' : e.archived_by,
     };
   }
 
@@ -1294,7 +1304,7 @@ export function createApp(deps: AppDeps) {
     const type = url.searchParams.get('type') ?? '';
     const id = url.searchParams.get('id') ?? '';
     if (!ENTITY_TYPES.has(type) || !/^(FI|HO)-[0-9A-Z]{8}$/.test(id)) throw new HttpError(422, 'validation_failed', 'type and id are required.');
-    return json({ ok: true, rows: (await evidenceFor(type, id)).map((e) => evidenceView(e, redact)) });
+    return json({ ok: true, rows: (await evidenceFor(type, id, !redact)).map((e) => evidenceView(e, redact)) });
   };
   const evidenceFile = (redact: boolean): Handler => async (ctx) => {
     const s = redact ? await requireMonitor(ctx.req) : await requireAdmin(ctx.req);
@@ -1305,6 +1315,154 @@ export function createApp(deps: AppDeps) {
     const res = await fileResponse(e.file_id);
     if (e.mime === 'application/pdf') res.headers.set('content-disposition', `inline; filename="${e.evidence_id}.pdf"`);
     return res;
+  };
+
+  // ------------------------------------------------------------ manual edits & corrections (all audited; identity never editable)
+  const EDIT_FIELDS: [string, string][] = [['category', 'category'], ['itemName', 'item_name'], ['description', 'description'], ['colorFeatures', 'color_features'], ['lastSeenLocation', 'last_seen_location'], ['lostDate', 'lost_date'], ['lostTime', 'lost_time']];
+  const PRE_VERIFICATION = ['Submitted', 'Under Review'];
+
+  const myEdit: Handler = async (ctx) => {
+    const s = await requireReporter(ctx.req);
+    const body = await readJson<Record<string, unknown>>(ctx.req, 4_500_000);
+    const input = parse(myComplaintEditInput, body);
+    const { c } = await loadOwn(s, ctx.params.id);
+    if (!PRE_VERIFICATION.includes(normalizeStatus(c.status))) throw new HttpError(409, 'locked', 'Details can only be edited before the office starts verification. Add information instead.');
+    const after: Record<string, string> = Object.fromEntries(EDIT_FIELDS.map(([k, col]) => [col, String((input as Record<string, unknown>)[k] ?? '')]));
+    after.ownership_evidence = input.ownershipEvidence;
+    const changes = diff(c, after);
+    let photo = '';
+    if (body.photo) { photo = await uploadImage(body.photo, `complaint-${c.complaint_id}-r`); changes.push('photo replaced'); }
+    if (!changes.length) throw new HttpError(422, 'validation_failed', 'Nothing changed.');
+    const actor = reporterActor(s);
+    const patch: Row = { ...after, updated_at: iso(), ...(photo ? { photo_file_id: photo } : {}) };
+    mustOk(await exec([
+      { op: 'update', table: 'Complaints', value: c.complaint_id, patch, expectVersion: c.version },
+      update(c.complaint_id, 'reporter_update', `You edited: ${changes.map((x) => x.split(':')[0]).join(', ')}`, actor.id),
+      log(ctx, actor, 'complaint_edited_by_reporter', 'Complaint', c.complaint_id, changes.join('; ').replace(/ownership_evidence: "[^"]*" → "[^"]*"/, 'ownership_evidence: (private) changed')),
+    ]), 3, 'complaint');
+    return json({ ok: true, changed: changes.length });
+  };
+
+  const staffCreateComplaint: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(staffComplaintCreateInput, await readJson(ctx.req));
+    const t = iso();
+    const cid = newComplaintId();
+    const r = await exec([
+      {
+        op: 'append', table: 'Complaints',
+        row: {
+          complaint_id: cid, created_at: t, updated_at: t, status: 'Submitted', idempotency_key: crypto.randomUUID(),
+          name: input.reporterName, student_id: input.studentId, department: '', phone: input.reporterContact, email: '',
+          category: input.category, item_name: input.itemName, description: input.description, color_features: input.colorFeatures,
+          last_seen_location: input.lastSeenLocation, lost_date: input.lostDate, lost_time: input.lostTime,
+          photo_file_id: '', ownership_evidence: input.ownershipEvidence, extra_info: '', linked_item_id: '',
+          collection_instructions: '', staff_notes: `[${t.slice(0, 10)} ${s.email}] Entered by staff: ${input.reason}`, retention_until: '', version: '1',
+          // Not a verified identity: receiver-confirmed handover needs the owner to report through the portal.
+          reporter_uid: '', reporter_type: 'Staff-entered', verified_phone: '', submission_channel: 'staff',
+          visit_info: '', proxy_name: '', proxy_phone: '', proxy_authorized_at: '', duplicate_of: '',
+        },
+      },
+      update(cid, 'status', 'Complaint entered by the office', s.email, { data: { status: 'Submitted' } }),
+      log(ctx, staffActor(s), 'complaint_created_by_staff', 'Complaint', cid, `unverified reporter "${input.reporterName}"; reason: ${input.reason}`),
+    ]);
+    mustOk(r, 3, 'complaint');
+    return json({ ok: true, complaintId: cid }, 201);
+  };
+
+  const staffEditComplaint: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(staffComplaintEditInput, await readJson(ctx.req));
+    const c = rowOf((await exec([{ op: 'get', table: 'Complaints', value: ctx.params.id }]))[0]);
+    if (!c) throw new HttpError(404, 'not_found', 'Complaint not found.');
+    if (['Returned', 'Closed'].includes(normalizeStatus(c.status))) throw new HttpError(409, 'locked', 'Completed complaints cannot be edited. Add a note to record a correction.');
+    const after: Record<string, string> = Object.fromEntries(EDIT_FIELDS.map(([k, col]) => [col, String((input as Record<string, unknown>)[k] ?? '')]));
+    const changes = diff(c, after);
+    if (!changes.length) throw new HttpError(422, 'validation_failed', 'Nothing changed.');
+    mustOk(await exec([
+      { op: 'update', table: 'Complaints', value: c.complaint_id, patch: { ...after, updated_at: iso() }, expectVersion: c.version },
+      update(c.complaint_id, 'staff_edit', `The office corrected: ${changes.map((x) => x.split(':')[0]).join(', ')}`, s.email),
+      log(ctx, staffActor(s), 'complaint_edited', 'Complaint', c.complaint_id, `${changes.join('; ')} | reason: ${input.reason}`),
+    ]), 3, 'complaint');
+    return json({ ok: true, changed: changes.length });
+  };
+
+  const editFound: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(foundItemEditInput, await readJson(ctx.req));
+    const f = rowOf((await exec([{ op: 'get', table: 'Found_Items', value: ctx.params.id }]))[0]);
+    if (!f) throw new HttpError(404, 'not_found', 'Item not found.');
+    if (f.status === 'Returned') throw new HttpError(409, 'locked', 'Returned items cannot be edited.');
+    const after: Record<string, string> = {
+      category: input.category, item_name: input.itemName, public_description: input.publicDescription, private_details: input.privateDetails,
+      color_features: input.colorFeatures, found_location: input.foundLocation, found_date: input.foundDate, found_time: input.foundTime, storage_location: input.storageLocation,
+    };
+    const changes = diff(f, after);
+    if (!changes.length) throw new HttpError(422, 'validation_failed', 'Nothing changed.');
+    mustOk(await exec([
+      { op: 'update', table: 'Found_Items', value: f.item_id, patch: { ...after, updated_at: iso() }, expectVersion: f.version },
+      log(ctx, staffActor(s), 'found_item_edited', 'FoundItem', f.item_id, `${changes.map((x) => (x.startsWith('private_details') ? 'private_details changed' : x)).join('; ')} | reason: ${input.reason}`),
+    ]), 2, 'found item');
+    return json({ ok: true, changed: changes.length });
+  };
+
+  const archiveEvidence: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(archiveInput, await readJson(ctx.req));
+    const e = (await (async () => {
+      const row = rowsOf((await exec([{ op: 'query', table: 'Evidence_Files', where: { evidence_id: ctx.params.id }, limit: 1 }]))[0])[0];
+      return row ? (await evidenceFor(row.entity_type, row.entity_id, true)).find((x) => x.evidence_id === row.evidence_id) : undefined;
+    })());
+    if (!e) throw new HttpError(404, 'not_found', 'Evidence not found.');
+    if (e.archived_reason) throw new HttpError(409, 'already_archived', 'Already archived.');
+    if (e.kind === 'signature') throw new HttpError(409, 'locked', 'Receiver signatures cannot be archived.');
+    const ops: Op[] = [];
+    if (e.entity_type === 'handover') {
+      const h = await loadHandover(e.entity_id);
+      if (!['Pending Acknowledgment', 'Acknowledged', 'Delivered'].includes(h.status)) throw new HttpError(409, 'evidence_locked', 'Evidence of a completed or cancelled handover cannot be changed.');
+    } else {
+      const f = rowOf((await exec([{ op: 'get', table: 'Found_Items', value: e.entity_id }]))[0]);
+      if (f) ops.push({ op: 'update', table: 'Found_Items', value: f.item_id, patch: { photo_file_ids: f.photo_file_ids.split(',').filter((x) => x && x !== e.file_id).join(','), updated_at: iso() } });
+    }
+    ops.unshift({ op: 'append', table: 'Evidence_Archive', row: { archive_id: newId('AR'), created_at: iso(), evidence_id: e.evidence_id, entity_type: e.entity_type, entity_id: e.entity_id, archived_by: s.email, reason: input.reason } });
+    ops.push(log(ctx, staffActor(s), 'evidence_archived', e.entity_type === 'found_item' ? 'FoundItem' : 'Handover', e.entity_id, `${e.evidence_id} (${e.kind}); file kept; reason: ${input.reason}`));
+    mustOk(await exec(ops), ops.length, 'evidence');
+    return json({ ok: true });
+  };
+
+  const claimNote: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(claimNoteInput, await readJson(ctx.req));
+    const cl = rowOf((await exec([{ op: 'get', table: 'Claim_Requests', value: ctx.params.id }]))[0]);
+    if (!cl) throw new HttpError(404, 'not_found', 'Claim not found.');
+    // Original decision notes are kept; corrections are appended with author and date.
+    const notes = [cl.decision_notes, `[Correction ${iso().slice(0, 16).replace('T', ' ')} ${s.email}] ${input.note}`].filter(Boolean).join('\n').slice(0, 3000);
+    mustOk(await exec([
+      { op: 'update', table: 'Claim_Requests', value: cl.claim_id, patch: { decision_notes: notes }, expectVersion: cl.version },
+      log(ctx, staffActor(s), 'claim_note_added', 'Claim', cl.claim_id, input.note),
+    ]), 2, 'claim');
+    return json({ ok: true });
+  };
+
+  const correctHandover: Handler = async (ctx) => {
+    const s = await requireAdmin(ctx.req);
+    const input = parse(handoverCorrectionInput, await readJson(ctx.req));
+    const h = await loadHandover(ctx.params.id);
+    const fields: Record<string, string> = {};
+    if (input.receiverName) fields.receiver_name = input.receiverName;
+    if (input.receiverIdType) fields.receiver_id_type = input.receiverIdType;
+    if (input.receiverIdLast4) fields.receiver_id_last4 = input.receiverIdLast4.toUpperCase();
+    const changes = diff(h, fields);
+    // Once the receiver has confirmed, the identity they confirmed is bound to the record: only notes can be added.
+    if (changes.length && h.status !== 'Pending Acknowledgment') throw new HttpError(409, 'locked', 'Receiver details are locked after the receiver confirms. Add a correction note instead.');
+    if (!changes.length && !input.note) throw new HttpError(422, 'validation_failed', 'Nothing to correct.');
+    const patch: Row = { ...fields };
+    if (input.note) patch.notes = [h.notes, `[Correction ${iso().slice(0, 16).replace('T', ' ')} ${s.email}] ${input.note}`].filter(Boolean).join('\n').slice(0, 1000);
+    mustOk(await exec([
+      { op: 'update', table: 'Handover_Records', value: h.handover_id, patch, expectVersion: h.version },
+      log(ctx, staffActor(s), 'handover_corrected', 'Handover', h.handover_id, `${[...changes, input.note && `note: ${input.note}`].filter(Boolean).join('; ')} | reason: ${input.reason}`),
+    ]), 2, 'handover');
+    return json({ ok: true });
   };
 
   // ------------------------------------------------------------ admin: other
@@ -1671,6 +1829,7 @@ export function createApp(deps: AppDeps) {
     ['GET', R('/api/me/notifications'), myNotifications],
     ['GET', R('/api/me/complaints/:cid'), myComplaint],
     ['POST', R('/api/me/complaints/:cid/update'), myUpdate],
+    ['POST', R('/api/me/complaints/:cid/edit'), myEdit],
     ['POST', R('/api/me/complaints/:cid/claim'), myClaim],
     ['POST', R('/api/me/complaints/:cid/cancel'), myCancel],
     ['POST', R('/api/me/complaints/:cid/proxy'), myProxy],
@@ -1693,6 +1852,12 @@ export function createApp(deps: AppDeps) {
     ['GET', R('/api/staff/found-items/:fi'), getFound],
     ['POST', R('/api/staff/found-items/:fi/status'), setFoundStatus],
     ['POST', R('/api/staff/found-items/:fi/evidence'), foundEvidenceUpload],
+    ['POST', R('/api/staff/found-items/:fi/edit'), editFound],
+    ['POST', R('/api/staff/complaints'), staffCreateComplaint],
+    ['POST', R('/api/staff/complaints/:cid/edit'), staffEditComplaint],
+    ['POST', R('/api/staff/evidence/:ev/archive'), archiveEvidence],
+    ['POST', R('/api/staff/claims/:cl/notes'), claimNote],
+    ['POST', R('/api/staff/handovers/:ho/correct'), correctHandover],
     ['GET', R('/api/staff/claims'), listClaims],
     ['POST', R('/api/staff/claims/:cl/decision'), decideClaim],
     ['GET', R('/api/staff/handovers'), listHandovers],
