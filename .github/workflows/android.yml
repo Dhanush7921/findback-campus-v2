@@ -1,0 +1,48 @@
+name: Android build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HAS_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: 21, cache: gradle }
+      - run: npm ci
+      - name: Build web assets for native
+        env: { VITE_API_BASE: '${{ vars.VITE_API_BASE }}' }
+        run: npm run build:native
+      - name: Android SDK (preinstalled on ubuntu-latest)
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && test -d "$ANDROID_HOME"
+      - run: npx cap sync android
+      - name: Debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with: { name: findback-debug-apk, path: android/app/build/outputs/apk/debug/*.apk, retention-days: 30 }
+      - name: Signed release (only when signing secrets exist)
+        if: env.HAS_SIGNING == 'true' && github.ref == 'refs/heads/main'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
+          ./gradlew --no-daemon assembleRelease bundleRelease
+          rm -f "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_SIGNING == 'true' && github.ref == 'refs/heads/main'
+        with: { name: findback-release, path: "android/app/build/outputs/**/*release*.*", retention-days: 30 }

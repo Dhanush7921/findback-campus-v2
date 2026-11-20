@@ -1,0 +1,78 @@
+name: Deploy frontend (GitHub Pages)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: Cloud Run API URL (normally the VITE_API_BASE repository variable)
+        required: false
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - name: Resolve API URL
+        id: api
+        env:
+          INPUT_API: ${{ inputs.api_base }}
+          VAR_API: ${{ vars.VITE_API_BASE }}
+        run: |
+          api="${INPUT_API:-$VAR_API}"
+          # The site enables forms only after the API answers at runtime, so a configured-but-down API is safe to build against.
+          if [ -z "$api" ]; then echo "::warning::No API configured; building with submissions disabled."; exit 0; fi
+          echo "base=$api" >> "$GITHUB_OUTPUT"
+          if curl -fsS --max-time 20 "$api/api/health" | grep -q '"storeReachable":true'; then echo "API healthy: $api"; else echo "::warning::API at $api is not healthy right now."; fi
+      - name: Build
+        env:
+          # Repository variables (Settings → Secrets and variables → Actions → Variables). Public values only.
+          VITE_API_BASE: ${{ steps.api.outputs.base }}
+          VITE_BASE: ${{ vars.VITE_BASE || format('/{0}/', github.event.repository.name) }}
+        run: npm run build:pages
+      - name: Custom domain (optional)
+        if: ${{ vars.CUSTOM_DOMAIN != '' }}
+        run: echo "${{ vars.CUSTOM_DOMAIN }}" > dist/CNAME
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dist }
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Smoke test (HTTPS, SPA deep link)
+        run: |
+          set -e
+          url="${{ steps.deployment.outputs.page_url }}"
+          for i in 1 2 3 4 5 6; do curl -fsS -o /dev/null "$url" && break || sleep 10; done
+          curl -fsS "$url" | grep -q '<div id="root">'
+          code=$(curl -s -o /dev/null -w '%{http_code}' "${url}student"); echo "deep link /student -> $code (404 status with SPA fallback body is expected on Pages)"
+          curl -fsS "${url}manifest.webmanifest" | grep -q '"standalone"'
+  browser-check:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Live browser check (SPA routes, client navigation, assets, console errors)
+        run: node tests/live/check-live.mjs "${{ needs.deploy.outputs.page_url }}"

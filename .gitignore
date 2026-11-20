@@ -1,0 +1,24 @@
+node_modules
+dist
+coverage
+test-results
+playwright-report
+.wrangler
+.dev.vars
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# Android/iOS build outputs and signing material
+android/app/build
+android/build
+android/.gradle
+android/local.properties
+android/app/release
+*.keystore
+*.jks
+ios/App/Pods
+ios/App/build
+ios/DerivedData
+dist-server
