@@ -1,6 +1,6 @@
 import { Building2, GraduationCap, KeyRound, LineChart, PlayCircle, ShieldCheck, UserRound } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useNavigate, useParams } from 'react-router';
 import { Button, Card, Field, Input, Notice } from '../../components/ui';
 import { apiPost } from '../../lib/api';
 import { DEMO_ACCOUNTS, enterDemo, type DemoRole } from '../../lib/demo';
@@ -64,6 +64,9 @@ function RoleCard({ role, icon: Icon, tone, text, to }: (typeof ROLES)[number]) 
 }
 
 export default function DemoLogin() {
+  const { role } = useParams();
+  // /demo/student etc. (linked from the sign-in pages) scrolls to that role's card.
+  useEffect(() => { if (role) document.querySelector(`[data-testid="demo-${role}"]`)?.scrollIntoView({ block: 'center' }); }, [role]);
   return (
     <div className="safe-x mx-auto max-w-6xl py-10">
       <div className="mb-8 max-w-3xl">

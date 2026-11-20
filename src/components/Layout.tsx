@@ -34,6 +34,7 @@ export default function Layout() {
   const online = useOnline();
   useEffect(() => { setOpen(false); window.scrollTo({ top: 0 }); }, [loc.pathname]);
   const links = [
+    ['/demo', 'Public demo'],
     ['/how-it-works', t('nav.how')],
     ['/guest', t('v2.guestT')],
     ['/help', t('nav.help')],
@@ -90,6 +91,7 @@ export function Footer() {
         <div className="flex flex-col gap-2 text-sm">
           <Link className="text-ink-500 hover:text-teal-700" to="/student">{t('v2.studentT')}</Link>
           <Link className="text-ink-500 hover:text-teal-700" to="/guest">{t('v2.guestT')}</Link>
+          <Link className="text-ink-500 hover:text-teal-700" to="/demo">Public V2 demo</Link>
           <Link className="text-ink-500 hover:text-teal-700" to="/how-it-works">{t('nav.how')}</Link>
         </div>
         <div className="flex flex-col gap-2 text-sm">

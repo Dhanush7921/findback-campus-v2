@@ -27,5 +27,8 @@ jobs:
       - name: E2E (built site → real API code, dev sign-in, in-memory store)
         run: npx playwright test --trace off
       - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: findback-v2-demo-screenshots, path: docs/screenshots, retention-days: 30, if-no-files-found: warn }
+      - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-results, path: test-results, retention-days: 7 }

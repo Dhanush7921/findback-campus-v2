@@ -97,6 +97,7 @@ export default function PhoneLogin({ portal }: { portal: 'student' | 'guest' }) 
         {config && !config.auth.enabled && <Notice tone="warn" className="mt-5">Phone sign-in is being set up by the college. Please try again later.</Notice>}
         {closed && <Notice tone="warn" className="mt-5">Guest reporting is paused by the office.</Notice>}
         {config?.auth.devAuth && !config.auth.firebase && <Notice tone="info" className="mt-5">{t('auth.devNote')}</Notice>}
+        <Notice tone="info" className="mt-5">Preview this role without a real OTP in the isolated <Link to={`/demo/${portal}`} className="font-bold underline">public demo</Link>. It uses fictional browser-only data.</Notice>
 
         {!challenge ? (
           <form onSubmit={send} className="mt-6 space-y-4" noValidate>

@@ -2,6 +2,8 @@
 
 Live site: https://dhanush7921.github.io/findback-campus-v2/
 
+Public demo: https://dhanush7921.github.io/findback-campus-v2/demo/ — simulated role sign-ins and isolated fictional browser data; no production APIs or records are used.
+
 Four portals:
 - **Student**: phone OTP sign-in, checked against the college registry. Students report items, track them, see matches, submit evidence, confirm receipt and get notifications.
 - **Guest**: phone OTP sign-in. Guests report with visit info and track only their own complaints.

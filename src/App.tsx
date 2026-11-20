@@ -66,7 +66,7 @@ export default function App() {
                   <Route path="privacy" element={<Privacy />} />
                   <Route path="student" element={<PhoneLogin portal="student" />} />
                   <Route path="guest" element={<PhoneLogin portal="guest" />} />
-                  <Route path="demo" element={<DemoLogin />} />
+                  <Route path="demo/:role?" element={<DemoLogin />} />
                   <Route path="report" element={<Navigate to="/student" replace />} />
                   <Route path="track" element={<Navigate to="/student" replace />} />
                   <Route path="me" element={<MeLayout />}>

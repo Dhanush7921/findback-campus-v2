@@ -1,6 +1,12 @@
 // CEO demo: full Student → Admin → Receiver → Management flow on the in-browser demo engine, plus manual edits.
 import { expect, test, type Page } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
 import zlib from 'node:zlib';
+
+// Screenshots for reviewers (uploaded by CI as the findback-v2-demo-screenshots artifact).
+const SHOTS = 'docs/screenshots';
+mkdirSync(SHOTS, { recursive: true });
+const shot = (page: Page, name: string) => page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name}.png` });
 
 function png(w = 64, h = 48, rgb = [20, 160, 140]) {
   const crc = (b: Buffer) => { let c = ~0; for (const x of b) { c ^= x; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
@@ -25,6 +31,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   await page.goto('');
   await page.getByTestId('explore-demo').click();
   await expect(page).toHaveURL(/\/demo$/);
+  await shot(page, '01-demo-login');
   // typed credentials (wrong then right)
   const card = page.getByTestId('demo-student');
   await card.getByLabel('Username').fill('student@demo.findback');
@@ -37,6 +44,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   apiHits.length = 0; // the public home page may fetch real config before demo starts; from here on nothing may reach it
   await expect(page.getByTestId('demo-banner')).toContainText('DEMO MODE — SAMPLE DATA ONLY');
   await expect(page.getByText('Brown leather wallet')).toBeVisible(); // seeded record
+  await shot(page, '02-student-home');
 
   // 1. Student reports calculator
   await page.goto('me/report');
@@ -68,6 +76,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   await page.getByTestId('evidence-camera').setInputFiles({ name: 'calc.png', mimeType: 'image/png', buffer: png() });
   await page.getByTestId('evidence-gallery').setInputFiles([{ name: 'b.png', mimeType: 'image/png', buffer: png(60, 60, [10, 10, 200]) }, { name: 'c.png', mimeType: 'image/png', buffer: png(50, 30, [200, 10, 10]) }]);
   await expect(page.getByTestId('evidence-previews').locator('img')).toHaveCount(3);
+  await shot(page, '03-admin-photo-previews');
   await page.getByRole('button', { name: 'Register item' }).click();
   await expect(page).toHaveURL(/staff\/inventory\/FI-/, { timeout: 20000 });
   await expect(page.getByTestId('evidence-found_item').locator('li')).toHaveCount(3);
@@ -98,6 +107,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   await page.getByRole('dialog').getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Issue one-time code' }).click();
   await expect(page.getByTestId('demo-code-label')).toBeVisible();
+  await shot(page, '04-demo-handover-code');
   const code = (await page.locator('p.font-mono.text-5xl').textContent())!.trim();
   expect(code).toMatch(/^\d{6}$/);
 
@@ -133,6 +143,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   await expect(page).toHaveURL(/\/management/);
   await page.goto('management/complaints');
   await expect(page.locator('tr', { hasText: cid })).toContainText('Returned');
+  await shot(page, '05-management-returned');
   await expect(page.getByRole('button', { name: /Edit|Save|Delete|Approve/ })).toHaveCount(0);
   await page.goto('management/handovers');
   await page.locator('tr', { hasText: cid }).getByRole('button', { name: 'Evidence' }).click();
