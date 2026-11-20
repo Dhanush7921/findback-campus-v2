@@ -5,6 +5,8 @@ import { StatusBadge } from '../../components/status';
 import { useToast } from '../../components/toast';
 import { Button, Card, EmptyState, ErrorState, Field, Input, Modal, Notice, PageHeader, PageSkeleton, Select, fmtDate } from '../../components/ui';
 import { ApiError, apiPost } from '../../lib/api';
+import { isDemo } from '../../lib/demo';
+import { EditModal } from '../../components/EditForms';
 import { EvidenceGallery, EvidencePicker, uploadEvidence, type PendingFile } from './Evidence';
 import { Table, useStaff, useStaffGet, type R } from './common';
 
@@ -31,6 +33,7 @@ function ProofPanel({ h, policy, onChanged }: { h: R; policy: Policy; onChanged:
   const [busy, setBusy] = useState('');
   const [key, setKey] = useState(0);
   const [code, setCode] = useState<{ code: string; expiresAt: string; receiverPhone: string } | null>(null);
+  const [correcting, setCorrecting] = useState(false);
   const locked = !['Pending Acknowledgment', 'Acknowledged', 'Delivered'].includes(h.status);
   const courier = h.mode === 'delivery' && h.deliveryStaff === me;
   const run = async (k: string, fn: () => Promise<void>) => { setBusy(k); try { await fn(); onChanged(); } catch (e) { toast((e as ApiError).message ?? (e as Error).message, 'error'); } finally { setBusy(''); } };
@@ -52,12 +55,15 @@ function ProofPanel({ h, policy, onChanged }: { h: R; policy: Policy; onChanged:
         <Card className="space-y-2 p-4">
           <p className="font-semibold">At the doorstep</p>
           <p className="text-ink-600">Check the recipient’s photo ID, then issue the one-time code. They enter it on their own verified phone.</p>
-          {code ? <p className="rounded-xl bg-emerald-50 p-3 text-center font-mono text-4xl font-extrabold tracking-[0.3em] text-teal-900" data-testid="delivery-code">{code.code}</p>
+          {code ? <><p className="rounded-xl bg-emerald-50 p-3 text-center font-mono text-4xl font-extrabold tracking-[0.3em] text-teal-900" data-testid="delivery-code">{code.code}</p>
+            {isDemo() && <p className="chip bg-amber-100 text-amber-900">DEMO CODE — simulated</p>}</>
             : <Button size="sm" loading={busy === 'code'} onClick={() => run('code', async () => setCode(await apiPost(`/api/staff/handovers/${h.handoverId}/delivery-code`, {}, { auth: 'staff' })))}><KeyRound className="h-4 w-4" /> Issue doorstep code</Button>}
           {code && <p className="text-xs text-ink-500">Phone ending {code.receiverPhone.slice(-4)} · expires in <Countdown until={code.expiresAt} /></p>}
         </Card>
       )}
-      <EvidenceGallery type="handover" id={h.handoverId} scope="staff" title="Proof of handover" refreshKey={key} />
+      <EvidenceGallery type="handover" id={h.handoverId} scope="staff" title="Proof of handover" refreshKey={key} canArchive={!locked} />
+      <Button size="sm" variant="secondary" onClick={() => setCorrecting(true)}>Correct details / add note</Button>
+      {correcting && <EditModal open title="Correct handover details" reason fields={h.status === 'Pending Acknowledgment' ? [{ key: 'receiverName', label: 'Receiver name' }, { key: 'receiverIdLast4', label: 'Last 4 of ID', max: 4 }, { key: 'note', label: 'Correction note', type: 'textarea', max: 500 }] : [{ key: 'note', label: 'Correction note', type: 'textarea', required: true, max: 500 }]} note={h.status === 'Pending Acknowledgment' ? 'Receiver details can be corrected until the receiver confirms.' : 'The receiver has confirmed, so their details are locked. Add a correction note; the original record is kept.'} initial={{ receiverName: h.receiverName, receiverIdLast4: h.receiverIdLast4, note: '' }} onClose={() => setCorrecting(false)} onSave={async (v) => { await apiPost(`/api/staff/handovers/${h.handoverId}/correct`, h.status === 'Pending Acknowledgment' ? v : { note: v.note, reason: v.reason }, { auth: 'staff' }); onChanged(); }} />}
       {locked ? <p className="text-xs text-ink-500">Evidence is locked because this handover is {h.status}. Nothing can be added, replaced or deleted.</p> : (
         <Card className="space-y-3 p-4">
           <Field label="Evidence type">{(fid) => (
@@ -170,6 +176,7 @@ export default function Handovers() {
           <div className="space-y-4 text-center">
             <p className="text-sm text-ink-600">The receiver must open FindBack on the phone ending <strong>{issued.receiverPhone.slice(-4)}</strong>, sign in with OTP, choose <em>Confirm receipt</em> and enter:</p>
             <p className="rounded-2xl bg-gradient-to-br from-emerald-50 to-cyan-50 p-5 font-mono text-5xl font-extrabold tracking-[0.3em] text-teal-900 select-none">{issued.code}</p>
+            {isDemo() && <p className="chip mx-auto bg-amber-100 text-amber-900" data-testid="demo-code-label">DEMO CODE — simulated, valid only in this demo</p>}
             <p className="text-xs text-ink-500">Expires in <Countdown until={issued.expiresAt} /> · single use · never stored in readable form</p>
             {issuedRow?.status === 'Acknowledged' ? <Notice tone="success" title="Receipt confirmed by receiver">Close this window and confirm release.</Notice> : <p className="text-xs text-ink-400">Waiting for the receiver… this updates automatically.</p>}
             <Button variant="secondary" className="w-full" onClick={() => { setActive(null); setIssued(null); }}>Close</Button>

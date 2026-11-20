@@ -1,6 +1,7 @@
 import { Camera, FileText, ImagePlus, Lock, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { MAX_EVIDENCE_BYTES } from '../../../shared/domain';
+import { ConfirmReason } from '../../components/EditForms';
 import { useToast } from '../../components/toast';
 import { Button, Card, Skeleton, fmtDate } from '../../components/ui';
 import { apiBlobUrl, apiPost } from '../../lib/api';
@@ -8,7 +9,7 @@ import { compressImage } from '../../lib/image';
 import { useStaffGet } from './common';
 
 export interface PendingFile { mime: string; dataBase64: string; previewUrl: string; bytes: number; name: string }
-export interface EvidenceRow { evidenceId: string; createdAt: string; kind: string; mime: string; bytes: number; sha256: string; uploadedBy: string; uploadedRole: string; caption: string; withheld: boolean; complaintId: string }
+export interface EvidenceRow { evidenceId: string; createdAt: string; kind: string; mime: string; bytes: number; sha256: string; uploadedBy: string; uploadedRole: string; caption: string; withheld: boolean; complaintId: string; archived?: boolean; archivedReason?: string; archivedBy?: string }
 
 export const KIND_LABEL: Record<string, string> = {
   item_photo: 'Item photo', handover_photo: 'Handover photo', handover_document: 'Handover document',
@@ -107,8 +108,9 @@ function Thumb({ row, scope }: { row: EvidenceRow; scope: 'staff' | 'mgmt' }) {
 }
 
 /** Read-only evidence register for an item or handover. Management gets the redacted view and cannot change anything. */
-export function EvidenceGallery({ type, id, scope, title = 'Evidence', refreshKey = 0 }: { type: 'found_item' | 'handover'; id: string; scope: 'staff' | 'mgmt'; title?: string; refreshKey?: number }) {
+export function EvidenceGallery({ type, id, scope, title = 'Evidence', refreshKey = 0, canArchive = false, onChanged }: { type: 'found_item' | 'handover'; id: string; scope: 'staff' | 'mgmt'; title?: string; refreshKey?: number; canArchive?: boolean; onChanged?: () => void }) {
   const { data, error, reload } = useStaffGet<{ rows: EvidenceRow[] }>(`/api/${scope}/evidence?type=${type}&id=${id}`);
+  const [archiving, setArchiving] = useState<EvidenceRow | null>(null);
   useEffect(() => { if (refreshKey) void reload(); }, [refreshKey, reload]);
   return (
     <Card className="p-4" data-testid={`evidence-${type}`}>
@@ -119,17 +121,20 @@ export function EvidenceGallery({ type, id, scope, title = 'Evidence', refreshKe
         : (
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {data.rows.map((r) => (
-              <li key={r.evidenceId} className="text-xs">
+              <li key={r.evidenceId} className={`text-xs ${r.archived ? 'opacity-50' : ''}`}>
                 <Thumb row={r} scope={scope} />
                 <p className="mt-1 font-semibold text-ink-700">{KIND_LABEL[r.kind] ?? r.kind}</p>
                 <p className="text-ink-500">{r.uploadedBy}</p>
                 <p className="text-ink-400">{fmtDate(r.createdAt)} · {Math.max(1, Math.round(r.bytes / 1024))} KB</p>
                 {r.caption && <p className="text-ink-500">“{r.caption}”</p>}
                 <p className="font-mono text-[10px] text-ink-300" title={`SHA-256 ${r.sha256}`}>{r.evidenceId} · {r.sha256.slice(0, 10)}</p>
+                {r.archived && <p className="font-semibold text-amber-700">Archived by {r.archivedBy}: {r.archivedReason}</p>}
+                {canArchive && scope === 'staff' && !r.archived && r.kind !== 'signature' && <button type="button" className="mt-1 font-semibold text-rose-700 hover:underline" onClick={() => setArchiving(r)}>Remove (archive)</button>}
               </li>
             ))}
           </ul>
         )}
+      <ConfirmReason open={!!archiving} title="Remove this file?" text="The file is archived, not deleted: it disappears from active views but stays in the private evidence register and audit history." confirmLabel="Archive file" onClose={() => setArchiving(null)} onConfirm={async (reason) => { await apiPost(`/api/staff/evidence/${archiving!.evidenceId}/archive`, { reason }, { auth: 'staff' }); await reload(); onChanged?.(); }} />
     </Card>
   );
 }

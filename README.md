@@ -12,6 +12,29 @@ Four portals:
 
 English and Telugu. Installable PWA plus an Android app (Capacitor). The source is iOS-ready.
 
+## CEO demo (sample data only)
+
+Open the site and choose **Explore Demo** (or go to `/demo`). Public demo logins:
+
+| Role | Username | Password |
+| --- | --- | --- |
+| Student | student@demo.findback | Student@123 |
+| Guest | guest@demo.findback | Guest@123 |
+| Main Admin | admin@demo.findback | Admin@123 |
+| Management | management@demo.findback | Management@123 |
+
+Each role also has a one-click **Enter demo** button. A permanent "DEMO MODE — SAMPLE DATA ONLY" bar is shown, with Switch role, Exit and (demo admin only) Reset demo.
+
+How it stays isolated:
+- The demo runs the same FindBack API code **inside the browser** on an in-memory store with fictional records. It makes no requests to Cloud Run, Google Sheets, Cloud Storage or Firebase.
+- Demo sign-ins are only accepted by that in-browser copy. The Cloud Run API always runs in production mode (development sign-in off, separate signing keys), so demo credentials and tokens are rejected there. There is no demo flag in the production API.
+- Demo data lives in this browser tab's IndexedDB and lasts for the browser session. Reset demo restores the sample data.
+- OTP (123456) and handover codes in the demo are simulated and labelled as such. Real OTP and staff sign-in are unchanged.
+
+## Manual edits
+
+Admins can create complaints, edit complaint and found-item details (with a required reason), archive photos/proof (never hard-deleted), add correction notes to claims, and correct handover details until the receiver confirms. Students and guests can edit their own complaint until staff start reviewing it. Management is read-only. Every change is written to the audit log with before → after values. Verified identities, consumed codes, receiver signatures and completed handover evidence cannot be edited.
+
 ## Stack
 | Part | Tech |
 |---|---|

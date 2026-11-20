@@ -75,5 +75,12 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Live browser check (SPA routes, client navigation, assets, console errors)
+      - name: Live browser check (SPA routes, navigation, assets, console errors, CEO demo logins)
         run: node tests/live/check-live.mjs "${{ needs.deploy.outputs.page_url }}"
+      - name: Upload live demo screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-demo-screenshots
+          path: live-demo-*.png
+          if-no-files-found: ignore

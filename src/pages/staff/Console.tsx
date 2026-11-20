@@ -5,6 +5,7 @@ import { Logo } from '../../components/art';
 import { useToast } from '../../components/toast';
 import { Button, ButtonLink, Card, Notice, PageSkeleton } from '../../components/ui';
 import { ApiError, apiGet, apiPost } from '../../lib/api';
+import { isDemo } from '../../lib/demo';
 import { firebaseSignOut, googleIdToken } from '../../lib/auth';
 import { useConfig } from '../../lib/config';
 import { clearSession, getSession, saveSession } from '../../lib/session';
@@ -112,7 +113,7 @@ export default function Console({ kind, base, nav, title }: { kind: 'admin' | 'm
         <div className="min-w-0">
           <header className="glass sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-x-0 border-t-0 safe-x" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
             <button className="grid h-11 w-11 place-items-center rounded-xl lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu className="h-6 w-6" /></button>
-            <span className="text-xs font-bold uppercase tracking-[0.14em] text-teal-700">{title}{config.environment !== 'production' && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">{config.environment}</span>}</span>
+            <span className="text-xs font-bold uppercase tracking-[0.14em] text-teal-700">{title}{config.environment !== 'production' && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">{isDemo() ? 'demo' : config.environment}</span>}</span>
             <div className="flex items-center gap-3">
               <span className="hidden text-right text-xs sm:block"><span className="block font-semibold text-ink-900">{email}</span><span className="text-ink-500">{role === 'admin' ? 'Main Admin' : 'Management (read-only)'}</span></span>
               <Button variant="secondary" size="sm" onClick={signOut}><LogOut className="h-4 w-4" /> Sign out</Button>

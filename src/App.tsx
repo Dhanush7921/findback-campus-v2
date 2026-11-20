@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router';
+import DemoBanner from './components/DemoBanner';
 import Layout from './components/Layout';
 import { ToastProvider } from './components/toast';
 import { PageSkeleton } from './components/ui';
@@ -13,6 +14,7 @@ const Help = lazy(() => import('./pages/public/Help'));
 const Privacy = lazy(() => import('./pages/public/Privacy'));
 const NotFound = lazy(() => import('./pages/public/NotFound'));
 const PhoneLogin = lazy(() => import('./pages/auth/PhoneLogin'));
+const DemoLogin = lazy(() => import('./pages/public/DemoLogin'));
 
 const MeLayout = lazy(() => import('./pages/me/MeLayout'));
 const MeDashboard = lazy(() => import('./pages/me/Dashboard'));
@@ -44,7 +46,6 @@ const MgmtPolicies = lazy(() => import('./pages/mgmt/Policies'));
 const MgmtComplaints = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtComplaints })));
 const MgmtFound = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtFound })));
 const MgmtHandovers = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtHandovers })));
-const DemoApp = lazy(() => import('./pages/demo/DemoApp'));
 
 // Native apps load from a local origin, where hash routing avoids server rewrites.
 const Router = IS_NATIVE ? HashRouter : BrowserRouter;
@@ -55,9 +56,9 @@ export default function App() {
       <ToastProvider>
         <ConfigProvider>
           <Router basename={IS_NATIVE ? undefined : import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
+            <DemoBanner />
             <Suspense fallback={<PageSkeleton />}>
               <Routes>
-                <Route path="demo/:role?" element={<DemoApp />} />
                 <Route element={<Layout />}>
                   <Route index element={<Home />} />
                   <Route path="how-it-works" element={<HowItWorks />} />
@@ -65,6 +66,7 @@ export default function App() {
                   <Route path="privacy" element={<Privacy />} />
                   <Route path="student" element={<PhoneLogin portal="student" />} />
                   <Route path="guest" element={<PhoneLogin portal="guest" />} />
+                  <Route path="demo/:role?" element={<DemoLogin />} />
                   <Route path="report" element={<Navigate to="/student" replace />} />
                   <Route path="track" element={<Navigate to="/student" replace />} />
                   <Route path="me" element={<MeLayout />}>

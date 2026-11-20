@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 import { StatusBadge, StatusStepper } from '../../components/status';
 import { useToast } from '../../components/toast';
+import { COMPLAINT_FIELDS, EditModal } from '../../components/EditForms';
 import { Button, ButtonLink, Card, ErrorState, Field, Input, Modal, Notice, PageSkeleton, Textarea, fmtDate } from '../../components/ui';
 import { ApiError, apiBlobUrl, apiPost } from '../../lib/api';
 import { useI18n, type I18nKey } from '../../lib/i18n';
@@ -33,6 +34,7 @@ export default function ComplaintView() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return <PageSkeleton />;
   const c = data.complaint;
@@ -54,8 +56,9 @@ export default function ComplaintView() {
             <h1 className="mt-1 text-2xl font-extrabold">{c.itemName}</h1>
             <p className="mt-1 text-sm text-ink-500">{c.category} · {c.lastSeenLocation} · {fmtDate(c.lostDate, false)}</p>
           </div>
-          <StatusBadge status={c.status} />
+          <div className="flex items-center gap-2"><StatusBadge status={c.status} />{['Submitted', 'Under Review'].includes(c.status) && <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>Edit</Button>}</div>
         </div>
+        {editing && <EditModal open title="Edit your complaint" fields={[...COMPLAINT_FIELDS, { key: 'ownershipEvidence', label: 'Private ownership evidence', type: 'textarea', required: true, max: 1000 }]} note="You can edit details until the office starts verification. Your verified name and phone cannot be changed." initial={{ category: c.category, itemName: c.itemName, description: c.description, colorFeatures: c.colorFeatures, lastSeenLocation: c.lastSeenLocation, lostDate: c.lostDate, lostTime: c.lostTime, ownershipEvidence: c.ownershipEvidence }} onClose={() => setEditing(false)} onSave={async (v) => { await apiPost(`/api/me/complaints/${c.complaintId}/edit`, v, { auth: 'reporter' }); await reload(); }} />}
         <div className="mt-6"><StatusStepper status={c.status} /></div>
         <p className="mt-5 text-sm text-ink-700">{t(`statusDesc.${c.status}` as I18nKey)}</p>
         <p className="mt-1 flex items-center gap-1.5 text-xs text-ink-400"><Clock className="h-3.5 w-3.5" /> {t('common.lastUpdated')} {fmtDate(c.updatedAt)}</p>

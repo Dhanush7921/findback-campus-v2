@@ -1,4 +1,5 @@
 import { API_BASE, IS_NATIVE } from './env';
+import { demoFetch, isDemo } from './demo';
 import { clearSession, getSession, type Kind } from './session';
 
 export class ApiError extends Error {
@@ -12,11 +13,12 @@ const inflight = new Map<string, Promise<unknown>>();
 interface Opts { auth?: Kind; body?: unknown; signal?: AbortSignal; retries?: number; timeoutMs?: number }
 
 export function apiConfigured() {
-  return Boolean(API_BASE);
+  return Boolean(API_BASE) || isDemo();
 }
 
 async function raw(method: string, path: string, o: Opts = {}): Promise<Response> {
-  if (!API_BASE) throw new ApiError(0, 'not_configured', 'The FindBack service is not connected yet. Please try again later.');
+  const demo = isDemo();
+  if (!API_BASE && !demo) throw new ApiError(0, 'not_configured', 'The FindBack service is not connected yet. Please try again later.');
   const headers: Record<string, string> = {};
   if (o.body !== undefined) headers['content-type'] = 'application/json';
   headers['x-client-channel'] = IS_NATIVE ? 'android' : window.matchMedia?.('(display-mode: standalone)').matches ? 'pwa' : 'web';
@@ -33,7 +35,9 @@ async function raw(method: string, path: string, o: Opts = {}): Promise<Response
     const timer = setTimeout(() => ctrl.abort(), o.timeoutMs ?? 30000);
     o.signal?.addEventListener('abort', () => ctrl.abort());
     try {
-      const res = await fetch(API_BASE + path, { method, headers, body: o.body === undefined ? undefined : JSON.stringify(o.body), signal: ctrl.signal, credentials: 'omit', cache: 'no-store' });
+      const payload = o.body === undefined ? undefined : JSON.stringify(o.body);
+      // Demo mode never touches the network: requests go to the in-browser demo engine.
+      const res = demo ? await demoFetch(method, path, headers, payload) : await fetch(API_BASE + path, { method, headers, body: payload, signal: ctrl.signal, credentials: 'omit', cache: 'no-store' });
       if (res.ok) return res;
       let j: { error?: string; message?: string; details?: Record<string, string> } = {};
       try { j = await res.json(); } catch { /* non-json */ }
