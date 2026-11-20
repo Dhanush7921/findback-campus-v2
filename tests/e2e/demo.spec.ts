@@ -90,7 +90,7 @@ test('demo: calculator from report to Returned, management updates, no real API 
   await page.getByRole('button', { name: 'This is mine — submit evidence' }).click();
   await page.getByLabel('Private ownership evidence').fill('My name Aarav Sharma is on a label under the battery cover');
   await page.getByRole('dialog').getByRole('button').filter({ hasText: /submit|send/i }).last().click();
-  await expect(page.getByText('Ownership Verification').first()).toBeVisible();
+  await expect(page.getByText('Claim sent.').first()).toBeVisible(); // wait for the claim to be saved before switching role
 
   // 4. Admin verifies claim and starts handover (demo code)
   await asRole(page, 'admin');
