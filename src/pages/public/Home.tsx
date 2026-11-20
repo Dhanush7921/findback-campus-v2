@@ -1,4 +1,4 @@
-import { ArrowRight, BadgeCheck, BarChart3, GraduationCap, Lock, MapPin, ShieldCheck, Smartphone, UserCog, UserRound, Users } from 'lucide-react';
+import { ArrowRight, BadgeCheck, BarChart3, GraduationCap, Lock, MapPin, PackageCheck, ShieldCheck, Smartphone, Sparkles, UserCog, UserRound, Users } from 'lucide-react';
 import { Link } from 'react-router';
 import { HeroArt } from '../../components/art';
 import { ButtonLink, Card } from '../../components/ui';
@@ -42,6 +42,15 @@ export default function Home() {
         <HeroArt className="mx-auto w-full max-w-[520px]" />
       </section>
 
+
+      <section className="safe-x mx-auto max-w-6xl pb-6">
+        <div className="overflow-hidden rounded-[2rem] bg-[#0b1026] p-6 text-white shadow-2xl shadow-violet-950/20 sm:p-8">
+          <div className="grid items-center gap-6 lg:grid-cols-[1.2fr_.8fr]">
+            <div><p className="inline-flex items-center gap-2 rounded-full bg-violet-500/20 px-3 py-1.5 text-xs font-extrabold uppercase tracking-[.14em] text-violet-200"><Sparkles className="h-4 w-4" /> Public V2 demo · no real data</p><h2 className="mt-4 text-2xl font-extrabold text-white sm:text-3xl">Explore every role without Firebase or a real college account.</h2><p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-300">Use fictional browser-only records to submit reports, register found items, verify claims, upload receiver proof and inspect read-only management analytics.</p><ButtonLink to="/demo" size="lg" className="mt-6 !bg-violet-600 hover:!bg-violet-500">Launch interactive demo <ArrowRight className="h-5 w-5" /></ButtonLink></div>
+            <div className="grid grid-cols-2 gap-3">{[[GraduationCap, 'Student'], [UserRound, 'Guest'], [PackageCheck, 'Main Admin'], [BarChart3, 'Management']].map(([Icon, label]) => { const I = Icon as typeof UserRound; return <div key={label as string} className="rounded-2xl border border-white/10 bg-white/[.06] p-4"><I className="h-5 w-5 text-violet-300" /><p className="mt-2 text-sm font-bold text-white">{label as string}</p></div>; })}</div>
+          </div>
+        </div>
+      </section>
 
       <section className="safe-x mx-auto max-w-6xl py-6" aria-labelledby="entry-title">
         <h2 id="entry-title" className="mb-6 text-2xl font-extrabold sm:text-3xl">{t('v2.entryTitle')}</h2>

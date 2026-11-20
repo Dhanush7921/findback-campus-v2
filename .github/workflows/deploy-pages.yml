@@ -39,6 +39,7 @@ jobs:
           # Repository variables (Settings → Secrets and variables → Actions → Variables). Public values only.
           VITE_API_BASE: ${{ steps.api.outputs.base }}
           VITE_BASE: ${{ vars.VITE_BASE || format('/{0}/', github.event.repository.name) }}
+          VITE_PUBLIC_DEMO: 'true'
         run: npm run build:pages
       - name: Custom domain (optional)
         if: ${{ vars.CUSTOM_DOMAIN != '' }}

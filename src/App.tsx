@@ -44,6 +44,7 @@ const MgmtPolicies = lazy(() => import('./pages/mgmt/Policies'));
 const MgmtComplaints = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtComplaints })));
 const MgmtFound = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtFound })));
 const MgmtHandovers = lazy(() => import('./pages/mgmt/Records').then((m) => ({ default: m.MgmtHandovers })));
+const DemoApp = lazy(() => import('./pages/demo/DemoApp'));
 
 // Native apps load from a local origin, where hash routing avoids server rewrites.
 const Router = IS_NATIVE ? HashRouter : BrowserRouter;
@@ -56,6 +57,7 @@ export default function App() {
           <Router basename={IS_NATIVE ? undefined : import.meta.env.BASE_URL.replace(/\/$/, '') || undefined}>
             <Suspense fallback={<PageSkeleton />}>
               <Routes>
+                <Route path="demo/:role?" element={<DemoApp />} />
                 <Route element={<Layout />}>
                   <Route index element={<Home />} />
                   <Route path="how-it-works" element={<HowItWorks />} />
